@@ -1,0 +1,21 @@
+{
+  "name": "gttd-rank-check-node",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Windows VPS gateway for BrowserOS MCP and country-selectable proxy routing used by POI rank checks.",
+  "type": "module",
+  "main": "dist/src/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test \"dist/test/**/*.test.js\"",
+    "start": "node dist/src/index.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0",
+    "@types/node": "^22.0.0"
+  }
+}

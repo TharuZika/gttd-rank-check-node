@@ -1,0 +1,34 @@
+{
+  "apiToken": "replace-with-at-least-32-random-bytes",
+  "gateway": {
+    "host": "127.0.0.1",
+    "port": 8787
+  },
+  "proxyRelay": {
+    "host": "127.0.0.1",
+    "port": 8788
+  },
+  "browserOs": {
+    "mcpUrl": "http://127.0.0.1:3211/mcp",
+    "executablePath": "C:\\Program Files\\BrowserOS\\BrowserOS.exe",
+    "requestTimeoutMs": 10000
+  },
+  "proxyProvider": {
+    "upstreamUrlTemplate": "http://user-country-{country}-session-{session}:password@provider-proxy.example:8080"
+  },
+  "egressVerification": {
+    "url": "https://ipapi.co/json/",
+    "timeoutMs": 10000,
+    "countryCodePath": "country_code"
+  },
+  "countries": [
+    {
+      "countryCode": "US",
+      "countryName": "United States"
+    }
+  ],
+  "logging": {
+    "directory": "C:\\ProgramData\\Findrhost\\RankCheckNode\\logs",
+    "retentionFiles": 14
+  }
+}
