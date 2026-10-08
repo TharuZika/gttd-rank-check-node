@@ -1,6 +1,7 @@
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { JsonLogger } from "./logger.js";
 import type { AppConfig } from "./types.js";
 
 const HOP_HEADERS = new Set([
@@ -19,10 +20,12 @@ const HOP_HEADERS = new Set([
 export class BrowserMcpProxy {
   private readonly mcpUrl: URL;
   private readonly requestTimeoutMs: number;
+  private readonly logger?: JsonLogger;
 
-  constructor(config: AppConfig["browserOs"]) {
+  constructor(config: AppConfig["browserOs"], logger?: JsonLogger) {
     this.mcpUrl = config.mcpUrl;
     this.requestTimeoutMs = config.requestTimeoutMs;
+    this.logger = logger;
   }
 
   async checkReady(timeoutMs = Math.min(this.requestTimeoutMs, 1500)): Promise<{ ok: boolean; statusCode?: number; error?: string }> {
@@ -65,12 +68,13 @@ export class BrowserMcpProxy {
       upstreamRes.pipe(res);
     });
 
-    upstreamReq.on("error", () => {
+    upstreamReq.on("error", (error) => {
       if (completed) {
         return;
       }
       completed = true;
       clearTimeout(timeout);
+      this.logger?.error("browseros_request_failed", { error: error.message });
       if (!res.headersSent) {
         res.writeHead(503, { "content-type": "application/json" });
       }
@@ -83,6 +87,7 @@ export class BrowserMcpProxy {
       }
       completed = true;
       upstreamReq.destroy();
+      this.logger?.error("browseros_request_timeout", { timeoutMs: this.requestTimeoutMs });
       if (!res.headersSent) {
         res.writeHead(504, { "content-type": "application/json" });
       }

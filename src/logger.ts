@@ -6,15 +6,24 @@ type LogLevel = "debug" | "info" | "warn" | "error";
 interface LoggerOptions {
   directory: string;
   retentionFiles: number;
+  terminal?: boolean;
+  stdout?: (line: string) => void;
+  stderr?: (line: string) => void;
 }
 
 export class JsonLogger {
   private readonly directory: string;
   private readonly retentionFiles: number;
+  private readonly terminal: boolean;
+  private readonly stdout: (line: string) => void;
+  private readonly stderr: (line: string) => void;
 
   constructor(options: LoggerOptions) {
     this.directory = options.directory;
     this.retentionFiles = options.retentionFiles;
+    this.terminal = options.terminal ?? true;
+    this.stdout = options.stdout ?? ((line) => process.stdout.write(line));
+    this.stderr = options.stderr ?? ((line) => process.stderr.write(line));
     if (this.directory) {
       mkdirSync(this.directory, { recursive: true });
       this.rotate();
@@ -38,18 +47,23 @@ export class JsonLogger {
   }
 
   private write(level: LogLevel, message: string, meta: Record<string, unknown>): void {
-    if (!this.directory) {
-      return;
-    }
-
     const safeMeta = sanitize(meta);
-    const line = JSON.stringify({
+    const record = {
       timestamp: new Date().toISOString(),
       level,
       message,
       ...(safeMeta && typeof safeMeta === "object" && !Array.isArray(safeMeta) ? safeMeta : {})
-    });
-    appendFileSync(join(this.directory, `${dateStamp()}.log`), `${line}\n`, "utf8");
+    };
+    const line = JSON.stringify(record);
+
+    if (this.terminal) {
+      const terminalLine = `${record.timestamp} ${level.toUpperCase()} ${message} ${JSON.stringify(safeMeta)}\n`;
+      (level === "warn" || level === "error" ? this.stderr : this.stdout)(terminalLine);
+    }
+
+    if (this.directory) {
+      appendFileSync(join(this.directory, `${dateStamp()}.log`), `${line}\n`, "utf8");
+    }
   }
 
   private rotate(): void {

@@ -15,7 +15,7 @@ export interface GatewayOptions {
 }
 
 export function createGatewayServer(options: GatewayOptions): Server {
-  const browserProxy = options.browserProxy ?? new BrowserMcpProxy(options.config.browserOs);
+  const browserProxy = options.browserProxy ?? new BrowserMcpProxy(options.config.browserOs, options.logger);
   return createServer((req, res) => {
     void routeRequest(req, res, { ...options, browserProxy });
   });
@@ -27,6 +27,32 @@ async function routeRequest(
   options: GatewayOptions & { browserProxy: BrowserMcpProxy }
 ): Promise<void> {
   const requestId = randomUUID();
+  const startedAt = Date.now();
+  let completed = false;
+  res.once("finish", () => {
+    completed = true;
+    options.logger.info("request_completed", {
+      requestId,
+      statusCode: res.statusCode,
+      durationMs: Date.now() - startedAt
+    });
+  });
+  res.once("close", () => {
+    if (!completed) {
+      options.logger.warn("request_aborted", {
+        requestId,
+        statusCode: res.statusCode,
+        durationMs: Date.now() - startedAt
+      });
+    }
+  });
+
+  options.logger.info("request_received", {
+    requestId,
+    method: req.method ?? "UNKNOWN",
+    path: (req.url ?? "/").split("?", 1)[0] || "/"
+  });
+
   try {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
     if (req.method === "GET" && url.pathname === "/health") {
@@ -82,7 +108,8 @@ async function routeRequest(
     sendJson(res, 404, { error: "not_found", requestId });
   } catch (error) {
     const appError = toAppError(error);
-    options.logger.warn("gateway_request_failed", {
+    const log = appError.statusCode >= 500 ? options.logger.error.bind(options.logger) : options.logger.warn.bind(options.logger);
+    log("gateway_request_failed", {
       requestId,
       statusCode: appError.statusCode,
       code: appError.code,

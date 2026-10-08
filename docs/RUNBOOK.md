@@ -84,6 +84,18 @@ Expected production checks:
 - `/countries` includes `US`.
 - Logs under `C:\ProgramData\Findrhost\RankCheckNode\logs` do not contain API tokens, proxy passwords, or full credentialed proxy URLs.
 
+### Terminal Logs
+
+When the Node service starts, the terminal prints readable logs for:
+
+- `proxy_relay_status` with the local relay endpoint and `up` status.
+- `browseros_mcp_status` with `up` or `down`, plus the MCP response status or sanitized error.
+- `gateway_up` with the gateway host and listening port.
+
+During normal operation, each request prints `request_received` and `request_completed` events with the request ID, method, pathname, response status, and duration. Client errors and server errors are printed as warnings or errors. Proxy and BrowserOS MCP startup status checks are not repeated for every request.
+
+Terminal and file logs redact API tokens, authorization values, proxy credentials, and credentialed proxy URLs. Request bodies are not logged.
+
 ## Acceptance Evidence
 
 Capture one real United States POI ranking check:

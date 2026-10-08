@@ -55,14 +55,14 @@ test("serves health publicly and protects countries, ready, proxy, and browser e
   });
   const browserServer = await listen(browser);
   const config = testConfig(`${browserServer.url}/mcp`);
-  const relay = new ProxyRelay({ host: "127.0.0.1", port: 0 }, new JsonLogger({ directory: "", retentionFiles: 0 }));
+  const relay = new ProxyRelay({ host: "127.0.0.1", port: 0 }, new JsonLogger({ directory: "", retentionFiles: 0, terminal: false }));
   const manager = new ProxyStateManager({
     countries: config.countries,
     upstreamUrlTemplate: config.proxyProvider.upstreamUrlTemplate,
     relay,
     verifyEgress: async () => ({ ok: true, observedCountryCode: "US", observedIp: "203.0.113.40" })
   });
-  const app = createGatewayServer({ config, proxyState: manager, logger: new JsonLogger({ directory: "", retentionFiles: 0 }) });
+  const app = createGatewayServer({ config, proxyState: manager, logger: new JsonLogger({ directory: "", retentionFiles: 0, terminal: false }) });
   const gateway = await listen(app);
 
   try {
@@ -116,14 +116,14 @@ test("streams BrowserOS MCP responses through /browser only after proxy readines
   });
   const browserServer = await listen(browser);
   const config = testConfig(`${browserServer.url}/mcp`);
-  const relay = new ProxyRelay({ host: "127.0.0.1", port: 0 }, new JsonLogger({ directory: "", retentionFiles: 0 }));
+  const relay = new ProxyRelay({ host: "127.0.0.1", port: 0 }, new JsonLogger({ directory: "", retentionFiles: 0, terminal: false }));
   const manager = new ProxyStateManager({
     countries: config.countries,
     upstreamUrlTemplate: config.proxyProvider.upstreamUrlTemplate,
     relay,
     verifyEgress: async () => ({ ok: true, observedCountryCode: "US", observedIp: "203.0.113.50" })
   });
-  const app = createGatewayServer({ config, proxyState: manager, logger: new JsonLogger({ directory: "", retentionFiles: 0 }) });
+  const app = createGatewayServer({ config, proxyState: manager, logger: new JsonLogger({ directory: "", retentionFiles: 0, terminal: false }) });
   const gateway = await listen(app);
 
   try {
@@ -159,14 +159,14 @@ test("reports BrowserOS as not ready for a broken MCP path", async () => {
   });
   const browserServer = await listen(browser);
   const config = testConfig(`${browserServer.url}/wrong-mcp`);
-  const relay = new ProxyRelay({ host: "127.0.0.1", port: 0 }, new JsonLogger({ directory: "", retentionFiles: 0 }));
+  const relay = new ProxyRelay({ host: "127.0.0.1", port: 0 }, new JsonLogger({ directory: "", retentionFiles: 0, terminal: false }));
   const manager = new ProxyStateManager({
     countries: config.countries,
     upstreamUrlTemplate: config.proxyProvider.upstreamUrlTemplate,
     relay,
     verifyEgress: async () => ({ ok: true, observedCountryCode: "US", observedIp: "203.0.113.60" })
   });
-  const app = createGatewayServer({ config, proxyState: manager, logger: new JsonLogger({ directory: "", retentionFiles: 0 }) });
+  const app = createGatewayServer({ config, proxyState: manager, logger: new JsonLogger({ directory: "", retentionFiles: 0, terminal: false }) });
   const gateway = await listen(app);
 
   try {
@@ -192,14 +192,23 @@ test("returns 504 when BrowserOS accepts a /browser request but stalls before he
   });
   const browserServer = await listen(browser);
   const config = testConfig(`${browserServer.url}/mcp`, 50);
-  const relay = new ProxyRelay({ host: "127.0.0.1", port: 0 }, new JsonLogger({ directory: "", retentionFiles: 0 }));
+  const relay = new ProxyRelay({ host: "127.0.0.1", port: 0 }, new JsonLogger({ directory: "", retentionFiles: 0, terminal: false }));
   const manager = new ProxyStateManager({
     countries: config.countries,
     upstreamUrlTemplate: config.proxyProvider.upstreamUrlTemplate,
     relay,
     verifyEgress: async () => ({ ok: true, observedCountryCode: "US", observedIp: "203.0.113.70" })
   });
-  const app = createGatewayServer({ config, proxyState: manager, logger: new JsonLogger({ directory: "", retentionFiles: 0 }) });
+  const stderr: string[] = [];
+  const app = createGatewayServer({
+    config,
+    proxyState: manager,
+    logger: new JsonLogger({
+      directory: "",
+      retentionFiles: 0,
+      stderr: (line: string) => stderr.push(line)
+    })
+  });
   const gateway = await listen(app);
 
   try {
@@ -217,6 +226,7 @@ test("returns 504 when BrowserOS accepts a /browser request but stalls before he
     });
 
     assert.equal(response.status, 504);
+    assert.match(stderr.join("\n"), /browseros_request_timeout/);
   } finally {
     await gateway.close();
     await browserServer.close();
@@ -280,4 +290,43 @@ test("supports an injected HTTPS egress transport for CONNECT-backed verificatio
     observedCountryCode: "US",
     observedIp: "198.51.100.8"
   });
+});
+
+test("logs received and completed requests plus request errors", async () => {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const config = testConfig("http://127.0.0.1:3211/mcp");
+  const relay = new ProxyRelay({ host: "127.0.0.1", port: 0 }, new JsonLogger({ directory: "", retentionFiles: 0, terminal: false }));
+  const manager = new ProxyStateManager({
+    countries: config.countries,
+    upstreamUrlTemplate: config.proxyProvider.upstreamUrlTemplate,
+    relay,
+    verifyEgress: async () => ({ ok: true, observedCountryCode: "US" })
+  });
+  const logger = new JsonLogger({
+    directory: "",
+    retentionFiles: 0,
+    stdout: (line: string) => stdout.push(line),
+    stderr: (line: string) => stderr.push(line)
+  });
+  const app = createGatewayServer({ config, proxyState: manager, logger });
+  const gateway = await listen(app);
+
+  try {
+    const health = await request(`${gateway.url}/health`);
+    assert.equal(health.status, 200);
+
+    const invalidProxy = await request(`${gateway.url}/proxy`, {
+      headers: { authorization: `Bearer ${apiToken}` }
+    });
+    assert.equal(invalidProxy.status, 400);
+  } finally {
+    await gateway.close();
+  }
+
+  assert.equal(stdout.filter((line) => line.includes("request_received")).length, 2);
+  assert.equal(stdout.filter((line) => line.includes("request_completed")).length, 2);
+  assert.match(stdout.join("\n"), /request_completed .*statusCode.*200/);
+  assert.match(stdout.join("\n"), /request_completed .*statusCode.*400/);
+  assert.match(stderr.join("\n"), /gateway_request_failed/);
 });
