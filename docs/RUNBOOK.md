@@ -26,6 +26,24 @@ The required Webshare variables are `WEBSHARE_MODE=backbone`, `WEBSHARE_HOST`, `
 
 Never commit the production `.env` or `config.json`. If credentials were previously committed, rotate the Webshare proxy password and API key because deleting the working-tree file does not remove values from Git history.
 
+### Running Directly From a Clone
+
+The service first checks `RANK_NODE_CONFIG`, then the ProgramData config, then a project-local `config.json`. To run without installing the scheduled service:
+
+```powershell
+npm install
+Copy-Item .\config.example.json .\config.json
+# Skip this copy when the project already has a configured .env file.
+Copy-Item .\.env.example .\.env
+notepad .\config.json
+notepad .\.env
+npm run dev
+```
+
+Use `npm run prod` to build and start the compiled service. Set `logging.directory` to `logs` in a project-local config if the current Windows user cannot write to the ProgramData log directory.
+
+If no config exists, startup exits with a `config_not_found` message listing the accepted locations instead of an unhandled `ENOENT` stack trace.
+
 ## BrowserOS Account
 
 Use a dedicated restricted Windows account for BrowserOS. To create it and enable automatic logon:

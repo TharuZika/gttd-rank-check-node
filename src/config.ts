@@ -1,10 +1,12 @@
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { AppError } from "./errors.js";
 import type { AppConfig, CountryConfig, LocalEndpoint, WebshareConfig } from "./types.js";
 
 export const DEFAULT_CONFIG_PATH = "C:\\ProgramData\\Findrhost\\RankCheckNode\\config.json";
 export const DEFAULT_ENV_PATH = "C:\\ProgramData\\Findrhost\\RankCheckNode\\.env";
+export const DEFAULT_PROJECT_CONFIG_PATH = join(findPackageRoot(dirname(fileURLToPath(import.meta.url))), "config.json");
 
 const WEBSHARE_ENV_KEYS = [
   "WEBSHARE_MODE",
@@ -27,14 +29,72 @@ export interface EnvironmentLoadOptions {
   projectEnvPath?: string;
 }
 
+export interface ConfigPathOptions {
+  explicitPath?: string;
+  servicePath?: string;
+  projectPath?: string;
+}
+
 export function loadConfig(
-  configPath = process.env.RANK_NODE_CONFIG ?? DEFAULT_CONFIG_PATH,
+  configPath = process.env.RANK_NODE_CONFIG,
   environmentOptions: EnvironmentLoadOptions = {}
 ): AppConfig {
+  const resolvedConfigPath = resolveConfigPath({ explicitPath: configPath });
+  const raw = readFileSync(resolvedConfigPath, "utf8");
+  let input: unknown;
+  try {
+    input = JSON.parse(raw);
+  } catch {
+    throw new AppError(400, "invalid_config", `Configuration file contains invalid JSON: ${resolvedConfigPath}`);
+  }
+
   const environment = loadRankNodeEnvironment(environmentOptions);
   const webshare = resolveWebshareConfig(environment);
-  const raw = readFileSync(configPath, "utf8");
-  return buildConfig(JSON.parse(raw), webshare);
+  return buildConfig(input, webshare);
+}
+
+export function resolveConfigPath(options: ConfigPathOptions = {}): string {
+  const explicitPath = cleanEnvironmentValue(options.explicitPath);
+  const servicePath = options.servicePath ?? DEFAULT_CONFIG_PATH;
+  const projectPath = options.projectPath ?? DEFAULT_PROJECT_CONFIG_PATH;
+
+  if (explicitPath) {
+    if (existsSync(explicitPath)) {
+      return explicitPath;
+    }
+    throw new AppError(
+      500,
+      "config_not_found",
+      `Configuration file not found at ${explicitPath}. Fix RANK_NODE_CONFIG or create that file from config.example.json.`
+    );
+  }
+
+  if (existsSync(servicePath)) {
+    return servicePath;
+  }
+  if (existsSync(projectPath)) {
+    return projectPath;
+  }
+
+  throw new AppError(
+    500,
+    "config_not_found",
+    `Configuration file not found. Create ${servicePath}, create ${projectPath} from config.example.json, or set RANK_NODE_CONFIG.`
+  );
+}
+
+function findPackageRoot(startDirectory: string): string {
+  let directory = startDirectory;
+  while (true) {
+    if (existsSync(join(directory, "package.json"))) {
+      return directory;
+    }
+    const parent = dirname(directory);
+    if (parent === directory) {
+      return startDirectory;
+    }
+    directory = parent;
+  }
 }
 
 export function buildConfig(input: unknown, webshare?: WebshareConfig): AppConfig {

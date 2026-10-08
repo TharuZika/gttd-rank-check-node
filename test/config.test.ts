@@ -3,7 +3,15 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildConfig, loadRankNodeEnvironment, resolveWebshareConfig } from "../src/config.js";
+import {
+  buildConfig,
+  DEFAULT_PROJECT_CONFIG_PATH,
+  loadConfig,
+  loadRankNodeEnvironment,
+  resolveConfigPath,
+  resolveWebshareConfig
+} from "../src/config.js";
+import { AppError } from "../src/errors.js";
 
 const baseConfig = {
   apiToken: "t".repeat(32),
@@ -133,6 +141,121 @@ test("loads the ProgramData environment first and uses the project file as a fal
     });
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("prefers an explicit config, then ProgramData, then the project config", () => {
+  const root = mkdtempSync(join(tmpdir(), "rank-node-config-"));
+  const explicitPath = join(root, "explicit.json");
+  const servicePath = join(root, "service.json");
+  const projectPath = join(root, "config.json");
+
+  try {
+    writeFileSync(explicitPath, "{}", "utf8");
+    writeFileSync(servicePath, "{}", "utf8");
+    writeFileSync(projectPath, "{}", "utf8");
+
+    assert.equal(resolveConfigPath({ explicitPath, servicePath, projectPath }), explicitPath);
+    assert.equal(resolveConfigPath({ servicePath, projectPath }), servicePath);
+
+    rmSync(servicePath);
+    assert.equal(resolveConfigPath({ servicePath, projectPath }), projectPath);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("reports actionable locations when no config file exists", () => {
+  const root = mkdtempSync(join(tmpdir(), "rank-node-missing-config-"));
+  const servicePath = join(root, "service.json");
+  const projectPath = join(root, "config.json");
+
+  try {
+    assert.throws(
+      () => resolveConfigPath({ servicePath, projectPath }),
+      (error) => {
+        assert.ok(error instanceof AppError);
+        assert.equal(error.code, "config_not_found");
+        assert.match(error.message, /RANK_NODE_CONFIG/);
+        assert.match(error.message, new RegExp(servicePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+        assert.match(error.message, new RegExp(projectPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+        return true;
+      }
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("reports a missing explicit config before validating a partial Webshare environment", () => {
+  const root = mkdtempSync(join(tmpdir(), "rank-node-explicit-config-"));
+  const missingPath = join(root, "missing.json");
+
+  try {
+    assert.throws(
+      () => loadConfig(missingPath, {
+        processEnvironment: { WEBSHARE_MODE: "backbone" },
+        serviceEnvPath: join(root, "missing-service.env"),
+        projectEnvPath: join(root, "missing-project.env")
+      }),
+      (error) => {
+        assert.ok(error instanceof AppError);
+        assert.equal(error.code, "config_not_found");
+        return true;
+      }
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("reports malformed JSON without echoing config contents", () => {
+  const root = mkdtempSync(join(tmpdir(), "rank-node-invalid-json-"));
+  const configPath = join(root, "config.json");
+  writeFileSync(configPath, '{"apiToken":"sentinel-config-secret', "utf8");
+
+  try {
+    assert.throws(
+      () => loadConfig(configPath, {
+        processEnvironment: {},
+        serviceEnvPath: join(root, "missing-service.env"),
+        projectEnvPath: join(root, "missing-project.env")
+      }),
+      (error) => {
+        assert.ok(error instanceof AppError);
+        assert.equal(error.code, "invalid_config");
+        assert.match(error.message, /invalid JSON/i);
+        assert.doesNotMatch(error.message, /sentinel-config-secret/);
+        return true;
+      }
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("derives the project config fallback independently of the launch directory", () => {
+  const originalDirectory = process.cwd();
+  const otherDirectory = mkdtempSync(join(tmpdir(), "rank-node-other-cwd-"));
+  const cwdConfigPath = join(otherDirectory, "config.json");
+  writeFileSync(cwdConfigPath, "{}", "utf8");
+
+  try {
+    process.chdir(otherDirectory);
+    const servicePath = join(otherDirectory, "missing-service.json");
+    try {
+      const selectedPath = resolveConfigPath({ servicePath });
+      assert.equal(selectedPath, DEFAULT_PROJECT_CONFIG_PATH);
+      assert.notEqual(selectedPath, cwdConfigPath);
+    } catch (error) {
+      assert.ok(error instanceof AppError);
+      assert.equal(error.code, "config_not_found");
+      assert.match(error.message, new RegExp(DEFAULT_PROJECT_CONFIG_PATH.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+      assert.doesNotMatch(error.message, new RegExp(cwdConfigPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    }
+  } finally {
+    process.chdir(originalDirectory);
+    rmSync(otherDirectory, { recursive: true, force: true });
   }
 });
 

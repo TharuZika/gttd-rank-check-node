@@ -48,7 +48,7 @@ export class JsonLogger {
 
   private write(level: LogLevel, message: string, meta: Record<string, unknown>): void {
     const safeMeta = sanitize(meta);
-    const safeMessage = sanitizeString(message);
+    const safeMessage = sanitizeLogText(message);
     const record = {
       timestamp: new Date().toISOString(),
       level,
@@ -118,14 +118,17 @@ function sanitize(value: unknown): unknown {
   if (typeof value === "string" && /^[a-z]+:\/\//i.test(value)) {
     return redactUrl(value);
   }
-  return typeof value === "string" ? sanitizeString(value) : value;
+  return typeof value === "string" ? sanitizeLogText(value) : value;
 }
 
-function sanitizeString(value: string): string {
+export function sanitizeLogText(value: string): string {
   return value
     .replace(/\b(?:https?|socks5):\/\/[^\s"']+/gi, (url) => redactUrl(url))
     .replace(/(authorization\s*[:=]\s*)(?:bearer\s+)?[^\s,;]+/gi, "$1****")
-    .replace(/(api[_-]?key\s*[:=]\s*)[^\s,;]+/gi, "$1****")
+    .replace(
+      /((?:api[_-]?(?:key|token)|token|password|secret|credential)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
+      "$1****"
+    )
     .replace(/\bbearer\s+[^\s,;]+/gi, "Bearer ****");
 }
 

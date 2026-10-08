@@ -41,7 +41,14 @@ export class ProxyRelay {
     if (this.server.listening) {
       return;
     }
-    await new Promise<void>((resolve) => this.server.listen(this.endpoint.port, this.endpoint.host, resolve));
+    await new Promise<void>((resolve, reject) => {
+      const onError = (error: Error) => reject(error);
+      this.server.once("error", onError);
+      this.server.listen(this.endpoint.port, this.endpoint.host, () => {
+        this.server.off("error", onError);
+        resolve();
+      });
+    });
     const address = this.server.address();
     if (address && typeof address === "object") {
       this.boundPort = address.port;

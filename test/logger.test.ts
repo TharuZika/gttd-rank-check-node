@@ -95,3 +95,22 @@ test("redacts API keys in structured metadata and free-text errors", () => {
   assert.doesNotMatch(stderr[0], /camel-case-secret|environment-secret|embedded-secret/);
   assert.match(stderr[0], /\*\*\*\*/);
 });
+
+test("redacts environment-style passwords, tokens, and credentials from free text", () => {
+  const stderr: string[] = [];
+  const logger = new JsonLogger({
+    directory: "",
+    retentionFiles: 0,
+    stdout: () => undefined,
+    stderr: (line: string) => stderr.push(line)
+  });
+
+  logger.error(
+    "startup_failed",
+    { error: 'WEBSHARE_PASSWORD=sentinel-password apiToken="sentinel-token" credential: sentinel-credential' }
+  );
+
+  assert.equal(stderr.length, 1);
+  assert.doesNotMatch(stderr[0], /sentinel-password|sentinel-token|sentinel-credential/);
+  assert.match(stderr[0], /\*\*\*\*/);
+});
