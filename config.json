@@ -1,5 +1,5 @@
 {
-  "apiToken": "replace-with-at-least-32-random-bytes",
+  "apiToken": "1a29df5f3e2c1ed8bc48a9dfd4541fc5e57b454fba933f62cfc4a7327f02c023",
   "gateway": {
     "host": "127.0.0.1",
     "port": 8787
@@ -10,11 +10,11 @@
   },
   "browserOs": {
     "mcpUrl": "http://127.0.0.1:9010/mcp",
-    "executablePath": "C:\\Program Files\\BrowserOS\\BrowserOS.exe",
+    "executablePath": "C:\\Users\\maxth\\AppData\\Local\\Chromium\\Application\\chrome.exe",
     "requestTimeoutMs": 10000
   },
   "proxyProvider": {
-    "upstreamUrlTemplate": "http://user-country-{country}-session-{session}:password@provider-proxy.example:8080"
+    "upstreamUrlTemplate": "http://drkcomrh-{country}-{session}:2ms09cmoeevy@p.webshare.io:80"
   },
   "egressVerification": {
     "url": "https://ipapi.co/json/",
@@ -28,7 +28,7 @@
     }
   ],
   "logging": {
-    "directory": "C:\\ProgramData\\Findrhost\\RankCheckNode\\logs",
+    "directory": "D:\\Users\\findrhost-2-win\\Desktop\\logs",
     "retentionFiles": 14
   }
 }
