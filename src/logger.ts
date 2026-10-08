@@ -48,16 +48,17 @@ export class JsonLogger {
 
   private write(level: LogLevel, message: string, meta: Record<string, unknown>): void {
     const safeMeta = sanitize(meta);
+    const safeMessage = sanitizeString(message);
     const record = {
       timestamp: new Date().toISOString(),
       level,
-      message,
+      message: safeMessage,
       ...(safeMeta && typeof safeMeta === "object" && !Array.isArray(safeMeta) ? safeMeta : {})
     };
     const line = JSON.stringify(record);
 
     if (this.terminal) {
-      const terminalLine = `${record.timestamp} ${level.toUpperCase()} ${message} ${JSON.stringify(safeMeta)}\n`;
+      const terminalLine = `${record.timestamp} ${level.toUpperCase()} ${safeMessage} ${JSON.stringify(safeMeta)}\n`;
       (level === "warn" || level === "error" ? this.stderr : this.stdout)(terminalLine);
     }
 
@@ -88,9 +89,14 @@ export function redactUrl(value: string): string {
       url.username = "****";
       url.password = "****";
     }
+    for (const key of [...url.searchParams.keys()]) {
+      if (/(token|password|secret|authorization|credential|api[_-]?key)/i.test(key)) {
+        url.searchParams.set(key, "****");
+      }
+    }
     return url.toString();
   } catch {
-    return value.replace(/(token|password|secret|authorization)=([^&\s]+)/gi, "$1=****");
+    return value.replace(/(token|password|secret|authorization|credential|api[_-]?key)\s*[:=]\s*([^&\s,;]+)/gi, "$1=****");
   }
 }
 
@@ -101,7 +107,7 @@ function sanitize(value: unknown): unknown {
   if (value && typeof value === "object") {
     const output: Record<string, unknown> = {};
     for (const [key, entry] of Object.entries(value)) {
-      if (/(token|password|secret|authorization|credential)/i.test(key)) {
+      if (/(token|password|secret|authorization|credential|api[_-]?key)/i.test(key)) {
         output[key] = "****";
       } else {
         output[key] = sanitize(entry);
@@ -112,7 +118,15 @@ function sanitize(value: unknown): unknown {
   if (typeof value === "string" && /^[a-z]+:\/\//i.test(value)) {
     return redactUrl(value);
   }
-  return value;
+  return typeof value === "string" ? sanitizeString(value) : value;
+}
+
+function sanitizeString(value: string): string {
+  return value
+    .replace(/\b(?:https?|socks5):\/\/[^\s"']+/gi, (url) => redactUrl(url))
+    .replace(/(authorization\s*[:=]\s*)(?:bearer\s+)?[^\s,;]+/gi, "$1****")
+    .replace(/(api[_-]?key\s*[:=]\s*)[^\s,;]+/gi, "$1****")
+    .replace(/\bbearer\s+[^\s,;]+/gi, "Bearer ****");
 }
 
 function dateStamp(): string {

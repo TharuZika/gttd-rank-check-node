@@ -1,7 +1,8 @@
 param(
   [string]$InstallRoot = "C:\ProgramData\Findrhost\RankCheckNode",
   [string]$SourceRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
-  [string]$ConfigPath = "C:\ProgramData\Findrhost\RankCheckNode\config.json"
+  [string]$ConfigPath = "C:\ProgramData\Findrhost\RankCheckNode\config.json",
+  [string]$EnvPath = "C:\ProgramData\Findrhost\RankCheckNode\.env"
 )
 
 $ErrorActionPreference = "Stop"
@@ -22,7 +23,12 @@ New-Item -ItemType Directory -Force -Path $logRoot | Out-Null
 
 if (-not (Test-Path -LiteralPath $ConfigPath)) {
   Copy-Item -LiteralPath (Join-Path $SourceRoot "config.example.json") -Destination $ConfigPath
-  Write-Warning "Created $ConfigPath from config.example.json. Edit apiToken, proxyProvider, and browserOs before starting the service."
+  Write-Warning "Created $ConfigPath from config.example.json. Edit apiToken and browserOs before starting the service."
+}
+
+if (-not (Test-Path -LiteralPath $EnvPath)) {
+  Copy-Item -LiteralPath (Join-Path $SourceRoot ".env.example") -Destination $EnvPath
+  Write-Warning "Created $EnvPath from .env.example. Add the Webshare proxy credentials and API key before starting the service."
 }
 
 icacls $InstallRoot /inheritance:r | Out-Null
@@ -37,4 +43,4 @@ finally {
   Pop-Location
 }
 
-Write-Host "Install complete. Next run scripts\register-startup.ps1 after editing $ConfigPath."
+Write-Host "Install complete. Next run scripts\register-startup.ps1 after editing $ConfigPath and $EnvPath."

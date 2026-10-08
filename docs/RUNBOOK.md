@@ -17,10 +17,14 @@ Only the Node gateway should be exposed through Cloudflare Tunnel or ngrok. Brow
 1. Open elevated PowerShell.
 2. Run `scripts\install.ps1`.
 3. Edit `C:\ProgramData\Findrhost\RankCheckNode\config.json`.
-4. Use a token with at least 32 random bytes.
-5. Set the proxy provider template, keeping `{country}` and optionally `{session}`.
+4. Edit `C:\ProgramData\Findrhost\RankCheckNode\.env` with the Webshare values copied from `.env.example`.
+5. Use a gateway API token with at least 32 random bytes.
 6. Confirm BrowserOS MCP URL, executable path, and `browserOs.requestTimeoutMs`.
 7. Run `scripts\register-startup.ps1 -BrowserUser "<restricted-user>"`.
+
+The required Webshare variables are `WEBSHARE_MODE=backbone`, `WEBSHARE_HOST`, `WEBSHARE_PORT`, `WEBSHARE_USERNAME`, `WEBSHARE_PASSWORD`, `WEBSHARE_API_KEY`, and `DEFAULT_COUNTRY`. Set `WEBSHARE_PLAN_ID` when the API key has multiple plans and the desired plan is not the account default. A partial Webshare environment is rejected at startup; if none of these variables are present, the legacy `proxyProvider.upstreamUrlTemplate` configuration remains available.
+
+Never commit the production `.env` or `config.json`. If credentials were previously committed, rotate the Webshare proxy password and API key because deleting the working-tree file does not remove values from Git history.
 
 ## BrowserOS Account
 
@@ -51,7 +55,16 @@ Only one tunnel task is registered by the script. Re-running it replaces the pre
 
 ## Update
 
-Run:
+Existing installations that are adopting Webshare mode must perform this one-time migration before restarting:
+
+```powershell
+copy .env.example C:\ProgramData\Findrhost\RankCheckNode\.env
+notepad C:\ProgramData\Findrhost\RankCheckNode\.env
+```
+
+Replace every placeholder with the rotated Webshare credentials and API key. Installations intentionally staying on the legacy `proxyProvider.upstreamUrlTemplate` mode should not create the `.env` file.
+
+Then run:
 
 ```powershell
 scripts\update.ps1
@@ -81,7 +94,9 @@ Expected production checks:
 
 - `/health` returns `200`.
 - `/ready` returns `503` before a country is selected, then `200` after `/proxy?country=US`.
-- `/countries` includes `US`.
+- `/countries` includes the countries allocated to the configured plan (including `US` when it is allocated).
+- `/countries` contains every country currently allocated to the selected Webshare plan. The list is cached for five minutes; a stale valid cache is used during temporary Webshare API failures with a one-minute retry backoff.
+- `/proxy?country=US` returns `rotationAttempts` and `ipChanged`. `ipChanged` is `null` for the first activation, `true` for a changed IP, and `false` when all three verified attempts returned the previous IP.
 - Logs under `C:\ProgramData\Findrhost\RankCheckNode\logs` do not contain API tokens, proxy passwords, or full credentialed proxy URLs.
 
 ### Terminal Logs
@@ -93,6 +108,8 @@ When the Node service starts, the terminal prints readable logs for:
 - `gateway_up` with the gateway host and listening port.
 
 During normal operation, each request prints `request_received` and `request_completed` events with the request ID, method, pathname, response status, and duration. Client errors and server errors are printed as warnings or errors. Proxy and BrowserOS MCP startup status checks are not repeated for every request.
+
+Country activation prints `proxy_country_activated`, `proxy_ip_changed`, or `proxy_ip_unchanged`. An unchanged IP is a warning but does not stop the bulk check after three successful country-verification attempts. A country mismatch or unavailable country list returns an error and prevents BrowserOS work from starting.
 
 Terminal and file logs redact API tokens, authorization values, proxy credentials, and credentialed proxy URLs. Request bodies are not logged.
 

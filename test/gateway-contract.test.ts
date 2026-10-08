@@ -89,7 +89,24 @@ test("serves health publicly and protects countries, ready, proxy, and browser e
       headers: { authorization: `Bearer ${apiToken}` }
     });
     assert.equal(switched.status, 200);
-    assert.equal((await switched.json() as { countryCode: string }).countryCode, "US");
+    const activation = await switched.json() as {
+      countryCode: string;
+      countryName: string;
+      sessionId: string;
+      observedCountryCode: string;
+      observedIp: string;
+      verifiedAt: string;
+      rotationAttempts: number;
+      ipChanged: boolean | null;
+    };
+    assert.equal(activation.countryCode, "US");
+    assert.equal(activation.countryName, "United States");
+    assert.match(activation.sessionId, /^\d+$/);
+    assert.equal(activation.observedCountryCode, "US");
+    assert.equal(activation.observedIp, "203.0.113.40");
+    assert.match(activation.verifiedAt, /^\d{4}-\d{2}-\d{2}T/);
+    assert.equal(activation.rotationAttempts, 1);
+    assert.equal(activation.ipChanged, null);
   } finally {
     await gateway.close();
     await browserServer.close();
@@ -320,13 +337,19 @@ test("logs received and completed requests plus request errors", async () => {
       headers: { authorization: `Bearer ${apiToken}` }
     });
     assert.equal(invalidProxy.status, 400);
+
+    const notReady = await request(`${gateway.url}/ready`, {
+      headers: { authorization: `Bearer ${apiToken}` }
+    });
+    assert.equal(notReady.status, 503);
   } finally {
     await gateway.close();
   }
 
-  assert.equal(stdout.filter((line) => line.includes("request_received")).length, 2);
-  assert.equal(stdout.filter((line) => line.includes("request_completed")).length, 2);
+  assert.equal(stdout.filter((line) => line.includes("request_received")).length, 3);
+  assert.equal(stdout.filter((line) => line.includes("request_completed")).length, 1);
   assert.match(stdout.join("\n"), /request_completed .*statusCode.*200/);
-  assert.match(stdout.join("\n"), /request_completed .*statusCode.*400/);
+  assert.match(stderr.join("\n"), /WARN request_completed .*statusCode.*400/);
+  assert.match(stderr.join("\n"), /ERROR request_completed .*statusCode.*503/);
   assert.match(stderr.join("\n"), /gateway_request_failed/);
 });

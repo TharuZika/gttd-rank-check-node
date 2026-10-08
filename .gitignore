@@ -3,4 +3,6 @@ dist/
 *.log
 .env
 .env.*
+!.env.example
+config.json
 *.zip

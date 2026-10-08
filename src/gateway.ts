@@ -31,11 +31,18 @@ async function routeRequest(
   let completed = false;
   res.once("finish", () => {
     completed = true;
-    options.logger.info("request_completed", {
+    const meta = {
       requestId,
       statusCode: res.statusCode,
       durationMs: Date.now() - startedAt
-    });
+    };
+    if (res.statusCode >= 500) {
+      options.logger.error("request_completed", meta);
+    } else if (res.statusCode >= 400) {
+      options.logger.warn("request_completed", meta);
+    } else {
+      options.logger.info("request_completed", meta);
+    }
   });
   res.once("close", () => {
     if (!completed) {
@@ -66,7 +73,7 @@ async function routeRequest(
     }
 
     if (req.method === "GET" && url.pathname === "/countries") {
-      sendJson(res, 200, { countries: options.proxyState.listCountries() });
+      sendJson(res, 200, { countries: await options.proxyState.listCountries() });
       return;
     }
 

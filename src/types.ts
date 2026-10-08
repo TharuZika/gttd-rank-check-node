@@ -8,6 +8,17 @@ export interface LocalEndpoint {
   port: number;
 }
 
+export interface WebshareConfig {
+  mode: "backbone";
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+  apiKey: string;
+  defaultCountry: string;
+  planId?: string;
+}
+
 export interface AppConfig {
   apiToken: string;
   gateway: LocalEndpoint;
@@ -20,6 +31,7 @@ export interface AppConfig {
   proxyProvider: {
     upstreamUrlTemplate: string;
   };
+  webshare?: WebshareConfig;
   egressVerification: {
     url: URL;
     timeoutMs: number;

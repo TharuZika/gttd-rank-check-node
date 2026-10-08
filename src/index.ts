@@ -7,6 +7,7 @@ import { verifyEgressViaProxy } from "./egress.js";
 import { JsonLogger } from "./logger.js";
 import { ProxyRelay } from "./proxy-relay.js";
 import { ProxyStateManager } from "./proxy-state.js";
+import { WebshareCountryProvider } from "./webshare.js";
 import type { AppConfig } from "./types.js";
 
 export interface StartedService {
@@ -35,10 +36,21 @@ export async function startService(config: AppConfig, logger = new JsonLogger(co
     error: browserStatus.error
   });
 
+  const countryProvider = config.webshare
+    ? new WebshareCountryProvider({
+      apiKey: config.webshare.apiKey,
+      mode: config.webshare.mode,
+      planId: config.webshare.planId,
+      logger
+    })
+    : undefined;
+
   const proxyState = new ProxyStateManager({
     countries: config.countries,
+    loadCountries: countryProvider ? () => countryProvider.listCountries() : undefined,
     upstreamUrlTemplate: config.proxyProvider.upstreamUrlTemplate,
     relay,
+    logger,
     verifyEgress: ({ countryCode, localProxyUrl }) => verifyEgressViaProxy({
       localProxyUrl,
       verificationUrl: config.egressVerification.url.href,
