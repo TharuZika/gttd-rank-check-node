@@ -1,7 +1,7 @@
-import { request as httpRequest } from "node:http";
-import { request as httpsRequest } from "node:https";
+import { Agent as HttpAgent, request as httpRequest } from "node:http";
 import { connect as netConnect } from "node:net";
 import type { Socket } from "node:net";
+import { connect as tlsConnect, type ConnectionOptions, type TLSSocket } from "node:tls";
 import { AppError } from "./errors.js";
 import type { EgressVerificationResult } from "./types.js";
 
@@ -13,6 +13,7 @@ export interface HttpsEgressTransportRequest {
 }
 
 export type HttpsEgressTransport = (request: HttpsEgressTransportRequest) => Promise<string>;
+export type TlsConnector = (options: ConnectionOptions, secureConnectListener: () => void) => TLSSocket;
 
 export interface VerifyEgressViaProxyOptions {
   localProxyUrl: string;
@@ -22,18 +23,22 @@ export interface VerifyEgressViaProxyOptions {
   countryCodePath: string;
   tlsRejectUnauthorized?: boolean;
   httpsTransport?: HttpsEgressTransport;
+  tlsConnector?: TlsConnector;
 }
 
 export async function verifyEgressViaProxy(options: VerifyEgressViaProxyOptions): Promise<EgressVerificationResult> {
   const verificationUrl = new URL(options.verificationUrl);
   const proxyUrl = new URL(options.localProxyUrl);
+  const httpsRequestOptions = {
+    proxyUrl,
+    targetUrl: verificationUrl,
+    timeoutMs: options.timeoutMs,
+    tlsRejectUnauthorized: options.tlsRejectUnauthorized ?? true
+  };
   const body = verificationUrl.protocol === "https:"
-    ? await (options.httpsTransport ?? requestHttpsViaProxy)({
-      proxyUrl,
-      targetUrl: verificationUrl,
-      timeoutMs: options.timeoutMs,
-      tlsRejectUnauthorized: options.tlsRejectUnauthorized ?? true
-    })
+    ? await (options.httpsTransport
+      ? options.httpsTransport(httpsRequestOptions)
+      : requestHttpsViaProxy(httpsRequestOptions, options.tlsConnector ?? tlsConnect))
     : await requestHttpViaProxy(proxyUrl, verificationUrl, options.timeoutMs);
 
   let payload: unknown;
@@ -89,9 +94,16 @@ function requestHttpViaProxy(proxyUrl: URL, targetUrl: URL, timeoutMs: number): 
   });
 }
 
-function requestHttpsViaProxy(options: HttpsEgressTransportRequest): Promise<string> {
+function requestHttpsViaProxy(options: HttpsEgressTransportRequest, tlsConnector: TlsConnector): Promise<string> {
   return openConnectTunnel(options.proxyUrl, options.targetUrl, options.timeoutMs)
-    .then((socket) => requestHttpsOverTunnel(socket, options.targetUrl, options.timeoutMs, options.tlsRejectUnauthorized));
+    .then((socket) => openTlsTunnel(
+      socket,
+      options.targetUrl,
+      options.timeoutMs,
+      options.tlsRejectUnauthorized,
+      tlsConnector
+    ))
+    .then((socket) => requestHttpsOverTunnel(socket, options.targetUrl, options.timeoutMs));
 }
 
 function openConnectTunnel(proxyUrl: URL, targetUrl: URL, timeoutMs: number): Promise<Socket> {
@@ -129,9 +141,48 @@ function openConnectTunnel(proxyUrl: URL, targetUrl: URL, timeoutMs: number): Pr
   });
 }
 
-function requestHttpsOverTunnel(socket: Socket, targetUrl: URL, timeoutMs: number, tlsRejectUnauthorized: boolean): Promise<string> {
+function openTlsTunnel(
+  socket: Socket,
+  targetUrl: URL,
+  timeoutMs: number,
+  tlsRejectUnauthorized: boolean,
+  tlsConnector: TlsConnector
+): Promise<TLSSocket> {
   return new Promise((resolve, reject) => {
-    const req = httpsRequest({
+    let tlsSocket: TLSSocket;
+    const timeout = setTimeout(() => {
+      tlsSocket.destroy(new AppError(504, "egress_timeout", "Egress TLS handshake timed out"));
+    }, timeoutMs);
+    const onError = (error: Error) => {
+      clearTimeout(timeout);
+      reject(error);
+    };
+    const onSecureConnect = () => {
+      clearTimeout(timeout);
+      tlsSocket.off("error", onError);
+      resolve(tlsSocket);
+    };
+
+    try {
+      tlsSocket = tlsConnector({
+        socket,
+        servername: targetUrl.hostname,
+        rejectUnauthorized: tlsRejectUnauthorized
+      }, onSecureConnect);
+      tlsSocket.once("error", onError);
+    } catch (error) {
+      clearTimeout(timeout);
+      socket.destroy();
+      reject(error);
+    }
+  });
+}
+
+function requestHttpsOverTunnel(socket: TLSSocket, targetUrl: URL, timeoutMs: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const agent = new HttpAgent({ keepAlive: false });
+    agent.createConnection = () => socket;
+    const req = httpRequest({
       hostname: targetUrl.hostname,
       port: Number(targetUrl.port || 443),
       method: "GET",
@@ -140,9 +191,7 @@ function requestHttpsOverTunnel(socket: Socket, targetUrl: URL, timeoutMs: numbe
         accept: "application/json",
         host: targetUrl.host
       },
-      createConnection: () => socket,
-      servername: targetUrl.hostname,
-      rejectUnauthorized: tlsRejectUnauthorized,
+      agent,
       timeout: timeoutMs
     }, (res) => {
       const chunks: Buffer[] = [];
@@ -150,14 +199,19 @@ function requestHttpsOverTunnel(socket: Socket, targetUrl: URL, timeoutMs: numbe
       res.on("end", () => {
         const body = Buffer.concat(chunks).toString("utf8");
         if ((res.statusCode ?? 500) >= 400) {
+          agent.destroy();
           reject(new AppError(502, "egress_http_error", "Egress verification failed", { statusCode: res.statusCode }));
           return;
         }
+        agent.destroy();
         resolve(body);
       });
     });
     req.on("timeout", () => req.destroy(new AppError(504, "egress_timeout", "Egress verification timed out")));
-    req.on("error", reject);
+    req.on("error", (error) => {
+      agent.destroy();
+      reject(error);
+    });
     req.end();
   });
 }

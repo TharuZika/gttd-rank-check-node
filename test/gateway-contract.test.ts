@@ -7,6 +7,7 @@ import { JsonLogger } from "../src/logger.js";
 import { ProxyStateManager } from "../src/proxy-state.js";
 import { ProxyRelay } from "../src/proxy-relay.js";
 import { verifyEgressViaProxy } from "../src/egress.js";
+import { AppError } from "../src/errors.js";
 
 const apiToken = "z".repeat(32);
 
@@ -352,4 +353,44 @@ test("logs received and completed requests plus request errors", async () => {
   assert.match(stderr.join("\n"), /WARN request_completed .*statusCode.*400/);
   assert.match(stderr.join("\n"), /ERROR request_completed .*statusCode.*503/);
   assert.match(stderr.join("\n"), /gateway_request_failed/);
+});
+
+test("logs the sanitized upstream status for egress verification HTTP failures", async () => {
+  const stderr: string[] = [];
+  const config = testConfig("http://127.0.0.1:3211/mcp");
+  const relay = new ProxyRelay(
+    { host: "127.0.0.1", port: 0 },
+    new JsonLogger({ directory: "", retentionFiles: 0, terminal: false })
+  );
+  const manager = new ProxyStateManager({
+    countries: config.countries,
+    upstreamUrlTemplate: config.proxyProvider.upstreamUrlTemplate,
+    relay,
+    verifyEgress: async () => {
+      throw new AppError(502, "egress_http_error", "Egress verification failed", { statusCode: 429 });
+    }
+  });
+  const app = createGatewayServer({
+    config,
+    proxyState: manager,
+    logger: new JsonLogger({
+      directory: "",
+      retentionFiles: 0,
+      stdout: () => undefined,
+      stderr: (line: string) => stderr.push(line)
+    })
+  });
+  const gateway = await listen(app);
+
+  try {
+    const response = await request(`${gateway.url}/proxy?country=US`, {
+      headers: { authorization: `Bearer ${apiToken}` }
+    });
+    assert.equal(response.status, 502);
+  } finally {
+    await gateway.close();
+  }
+
+  assert.match(stderr.join("\n"), /gateway_request_failed/);
+  assert.match(stderr.join("\n"), /upstreamStatusCode.*429/);
 });

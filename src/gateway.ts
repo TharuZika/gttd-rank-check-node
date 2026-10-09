@@ -120,7 +120,10 @@ async function routeRequest(
       requestId,
       statusCode: appError.statusCode,
       code: appError.code,
-      message: appError.message
+      message: appError.message,
+      upstreamStatusCode: typeof appError.details?.statusCode === "number"
+        ? appError.details.statusCode
+        : undefined
     });
     sendJson(res, appError.statusCode, {
       error: appError.code,
