@@ -1,5 +1,7 @@
 # Controlling Webshare Proxies via Node.js on a Windows VPS (Cloudflare Tunnel)
 
+> Project-specific note: `gttd-rank-check-node` uses exact allocated Backbone records returned by Webshare's proxy-list API. The dynamic username examples in Method A do not apply to plans that report `no_proxies_allocated` for synthesized usernames. For this service, connect through `p.webshare.io` with the selected record's exact `username` and `password`; do not use its Direct-mode `proxy_address`/`port`.
+
 This guide provides end-to-end instructions for configuring dynamic proxy routing using **Webshare** inside a **Node.js** service hosted on a **Windows VPS** and exposed via **Cloudflare Tunnel (`cloudflared`)**.
 
 ---
@@ -178,15 +180,15 @@ app.listen(PORT, () => {
 
 ---
 
-## 4. Implementation: Method B (Webshare REST API Integration)
+## 4. Implementation: Read-only Webshare REST API Integration
 
-Use this method when you want to inspect, select, or refresh individual proxies allocated to your account.
+Use this method to inspect and select individual proxies already allocated to your account. `gttd-rank-check-node` must not call proxy replacement, refresh, or other account-mutating APIs.
 
 ### Common API Endpoints
 
-- **Proxy List:** `GET https://proxy.webshare.io/api/v2/proxy/list/?mode=direct&page=1&page_size=25`
-- **Replace/Rotate IP:** `POST https://proxy.webshare.io/api/v2/proxy/replace/`
-- **Account Stats:** `GET https://proxy.webshare.io/api/v2/user/`
+- **Allocated Backbone Proxy List:** `GET https://proxy.webshare.io/api/v2/proxy/list/?mode=backbone&page=1&page_size=100`
+
+The proxy-replacement endpoint is intentionally excluded. Rotation in this service means selecting another existing allocated record; it does not mutate the Webshare account.
 
 ### Controller Implementation: `webshareApi.js`
 
@@ -207,12 +209,12 @@ export class WebshareClient {
   }
 
   /**
-   * Retrieves active proxies filtered by country.
+   * Retrieves already allocated Backbone proxies filtered by country.
    * @param {string[]} countries Array of ISO country codes (e.g. ['US', 'FR'])
    */
   async listProxiesByCountry(countries = []) {
     const params = {
-      mode: "direct",
+      mode: "backbone",
       page_size: 100,
     };
     if (countries.length > 0) {
@@ -221,21 +223,6 @@ export class WebshareClient {
 
     const res = await this.client.get("/proxy/list/", { params });
     return res.data.results;
-  }
-
-  /**
-   * Requests a replacement for an existing proxy address.
-   * @param {string} proxyAddress The IP of the proxy to replace.
-   * @param {string} [countryCode] Desired replacement country code.
-   */
-  async replaceProxy(proxyAddress, countryCode = null) {
-    const payload = { proxy_address: proxyAddress };
-    if (countryCode) {
-      payload.country_code = countryCode.toUpperCase();
-    }
-
-    const res = await this.client.post("/proxy/replace/", payload);
-    return res.data;
   }
 }
 ```

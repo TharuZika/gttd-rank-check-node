@@ -19,6 +19,9 @@ const WEBSHARE_ENV_KEYS = [
   "WEBSHARE_PLAN_ID"
 ] as const;
 const REQUIRED_WEBSHARE_ENV_KEYS = WEBSHARE_ENV_KEYS.filter((key) => key !== "WEBSHARE_PLAN_ID");
+const ISO_3166_ALPHA_2 = new Set(
+  "AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW".split(" ")
+);
 
 type JsonRecord = Record<string, unknown>;
 type Environment = Record<string, string | undefined>;
@@ -122,13 +125,13 @@ export function buildConfig(input: unknown, webshare?: WebshareConfig): AppConfi
     throw new AppError(400, "invalid_config", "browserOs.mcpUrl must point to localhost");
   }
 
-  const upstreamUrlTemplate = webshare
-    ? buildWebshareProxyTemplate(webshare)
-    : readConfiguredProxyTemplate(record.proxyProvider);
-  if (!upstreamUrlTemplate.includes("{country}")) {
-    throw new AppError(400, "invalid_config", "proxyProvider.upstreamUrlTemplate must include {country}");
+  const upstreamUrlTemplate = webshare ? undefined : readConfiguredProxyTemplate(record.proxyProvider);
+  if (upstreamUrlTemplate !== undefined) {
+    if (!upstreamUrlTemplate.includes("{country}")) {
+      throw new AppError(400, "invalid_config", "proxyProvider.upstreamUrlTemplate must include {country}");
+    }
+    validateUpstreamTemplateProtocol(upstreamUrlTemplate);
   }
-  validateUpstreamTemplateProtocol(upstreamUrlTemplate);
 
   const egressVerification = requireRecord(record.egressVerification, "egressVerification");
   const egressUrl = new URL(requireString(egressVerification.url, "egressVerification.url"));
@@ -228,11 +231,6 @@ export function resolveWebshareConfig(environment: Environment): WebshareConfig 
   };
 }
 
-function buildWebshareProxyTemplate(config: WebshareConfig): string {
-  const username = `${encodeURIComponent(config.username)}-{country}-{session}`;
-  return `http://${username}:${encodeURIComponent(config.password)}@${config.host}:${config.port}`;
-}
-
 function readConfiguredProxyTemplate(value: unknown): string {
   const proxyProvider = requireRecord(value, "proxyProvider");
   return requireString(proxyProvider.upstreamUrlTemplate, "proxyProvider.upstreamUrlTemplate");
@@ -294,10 +292,14 @@ function cleanEnvironmentValue(value: string | undefined): string | undefined {
 
 export function normalizeCountryCode(countryCode: string): string {
   const normalized = countryCode.trim().toUpperCase();
-  if (!/^[A-Z]{2}$/.test(normalized)) {
-    throw new AppError(400, "invalid_country", "country must be an ISO-2 country code");
+  if (!isIsoCountryCode(normalized)) {
+    throw new AppError(400, "invalid_country", "country must be an ISO-3166-1 alpha-2 country code");
   }
   return normalized;
+}
+
+export function isIsoCountryCode(countryCode: string): boolean {
+  return ISO_3166_ALPHA_2.has(countryCode);
 }
 
 function isLocalHost(host: string): boolean {

@@ -47,4 +47,4 @@ See [docs/RUNBOOK.md](docs/RUNBOOK.md) for the Windows VPS setup, BrowserOS acco
 
 All endpoints except `/health` require `Authorization: Bearer <apiToken>`.
 
-`/countries` reads the countries allocated to the configured Webshare plan. Calling `/proxy?country=XX` selects a numeric sticky session, verifies the country and egress IP, and retries up to three sessions when the previous IP is returned.
+`/countries` reads valid allocated proxy records from the configured Webshare plan. Calling `/proxy?country=XX` selects an exact allocated record for that country, connects through the configured Backbone endpoint (normally `p.webshare.io:80`), and verifies the country and egress IP. Rotation moves between allocated records for up to three verification attempts. The numeric `sessionId` returned by the API is a local activation identifier; it is not appended to the Webshare username.

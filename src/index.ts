@@ -45,6 +45,8 @@ export async function startService(config: AppConfig, logger = new JsonLogger(co
         apiKey: config.webshare.apiKey,
         mode: config.webshare.mode,
         planId: config.webshare.planId,
+        proxyHost: config.webshare.host,
+        proxyPort: config.webshare.port,
         logger
       })
       : undefined;
@@ -53,6 +55,9 @@ export async function startService(config: AppConfig, logger = new JsonLogger(co
       countries: config.countries,
       loadCountries: countryProvider ? () => countryProvider.listCountries() : undefined,
       upstreamUrlTemplate: config.proxyProvider.upstreamUrlTemplate,
+      resolveUpstreamProxy: countryProvider
+        ? ({ countryCode }) => countryProvider.selectProxy(countryCode)
+        : undefined,
       relay,
       logger,
       verifyEgress: ({ countryCode, localProxyUrl }) => verifyEgressViaProxy({

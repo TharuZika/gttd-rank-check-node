@@ -1,4 +1,5 @@
 import { AppError } from "./errors.js";
+import { isIsoCountryCode, normalizeCountryCode } from "./config.js";
 import type { JsonLogger } from "./logger.js";
 import type { CountryConfig, WebshareConfig } from "./types.js";
 
@@ -14,6 +15,8 @@ interface WebshareCountryProviderOptions {
   apiKey: string;
   mode: WebshareConfig["mode"];
   planId?: string;
+  proxyHost?: string;
+  proxyPort?: number;
   fetch?: Fetch;
   now?: () => number;
   logger?: Pick<JsonLogger, "warn">;
@@ -27,13 +30,38 @@ interface WebshareCountryProviderOptions {
 interface ProxyListPage {
   count?: number;
   next: string | null;
-  results: Array<{ country_code?: unknown }>;
+  results: ProxyListResult[];
+}
+
+interface ProxyListResult {
+  id?: unknown;
+  country_code?: unknown;
+  valid?: unknown;
+  username?: unknown;
+  password?: unknown;
+}
+
+interface WebshareProxyRecord {
+  identity: string;
+  username: string;
+  password: string;
+}
+
+interface ProxySnapshot {
+  countries: CountryConfig[];
+  proxiesByCountry: Map<string, WebshareProxyRecord[]>;
+}
+
+interface CachedProxySnapshot extends ProxySnapshot {
+  refreshedAt: number;
 }
 
 export class WebshareCountryProvider {
   private readonly apiKey: string;
   private readonly mode: WebshareConfig["mode"];
   private readonly planId?: string;
+  private readonly proxyHost: string;
+  private readonly proxyPort: number;
   private readonly fetch: Fetch;
   private readonly now: () => number;
   private readonly logger?: Pick<JsonLogger, "warn">;
@@ -42,14 +70,17 @@ export class WebshareCountryProvider {
   private readonly timeoutMs: number;
   private readonly refreshBackoffMs: number;
   private readonly sleep: (milliseconds: number) => Promise<void>;
-  private cached?: { countries: CountryConfig[]; refreshedAt: number };
-  private refreshInFlight?: Promise<CountryConfig[]>;
+  private cached?: CachedProxySnapshot;
+  private refreshInFlight?: Promise<ProxySnapshot>;
   private nextRefreshAllowedAt = 0;
+  private readonly lastSelectedProxyIdentityByCountry = new Map<string, string>();
 
   constructor(options: WebshareCountryProviderOptions) {
     this.apiKey = options.apiKey;
     this.mode = options.mode;
     this.planId = options.planId;
+    this.proxyHost = options.proxyHost ?? "p.webshare.io";
+    this.proxyPort = options.proxyPort ?? 80;
     this.fetch = options.fetch ?? fetch;
     this.now = options.now ?? Date.now;
     this.logger = options.logger;
@@ -61,19 +92,49 @@ export class WebshareCountryProvider {
   }
 
   async listCountries(): Promise<CountryConfig[]> {
+    const snapshot = await this.loadSnapshot();
+    return cloneCountries(snapshot.countries);
+  }
+
+  async selectProxy(rawCountryCode: string): Promise<string> {
+    const countryCode = normalizeCountryCode(rawCountryCode);
+    const snapshot = await this.loadSnapshot();
+    const proxies = snapshot.proxiesByCountry.get(countryCode) ?? [];
+    if (proxies.length === 0) {
+      throw new AppError(
+        502,
+        "webshare_proxy_unavailable",
+        "No usable Webshare proxy is allocated for the selected country"
+      );
+    }
+
+    const lastIdentity = this.lastSelectedProxyIdentityByCountry.get(countryCode);
+    const lastIndex = lastIdentity === undefined
+      ? -1
+      : proxies.findIndex((proxy) => proxy.identity === lastIdentity);
+    const proxy = proxies[(lastIndex + 1) % proxies.length];
+    this.lastSelectedProxyIdentityByCountry.set(countryCode, proxy.identity);
+
+    const upstream = new URL(`http://${this.proxyHost}:${this.proxyPort}`);
+    upstream.username = encodeURIComponent(proxy.username);
+    upstream.password = encodeURIComponent(proxy.password);
+    return upstream.href;
+  }
+
+  private async loadSnapshot(): Promise<ProxySnapshot> {
     if (this.cached && this.now() - this.cached.refreshedAt < this.cacheTtlMs) {
-      return cloneCountries(this.cached.countries);
+      return this.cached;
     }
     if (this.cached && this.now() < this.nextRefreshAllowedAt) {
-      return cloneCountries(this.cached.countries);
+      return this.cached;
     }
 
     try {
-      this.refreshInFlight ??= this.fetchCountries();
-      const countries = await this.refreshInFlight;
-      this.cached = { countries, refreshedAt: this.now() };
+      this.refreshInFlight ??= this.fetchProxySnapshot();
+      const snapshot = await this.refreshInFlight;
+      this.cached = { ...snapshot, refreshedAt: this.now() };
       this.nextRefreshAllowedAt = 0;
-      return cloneCountries(countries);
+      return this.cached;
     } catch (error) {
       if (this.cached) {
         this.nextRefreshAllowedAt = this.now() + this.refreshBackoffMs;
@@ -81,7 +142,7 @@ export class WebshareCountryProvider {
           cachedCountryCount: this.cached.countries.length,
           error: safeErrorCode(error)
         });
-        return cloneCountries(this.cached.countries);
+        return this.cached;
       }
       throw new AppError(502, "webshare_countries_unavailable", "Unable to load allocated Webshare countries");
     } finally {
@@ -89,8 +150,9 @@ export class WebshareCountryProvider {
     }
   }
 
-  private async fetchCountries(): Promise<CountryConfig[]> {
-    const countryCodes = new Set<string>();
+  private async fetchProxySnapshot(): Promise<ProxySnapshot> {
+    const proxiesByCountry = new Map<string, WebshareProxyRecord[]>();
+    const proxyIdentities = new Set<string>();
     const visited = new Set<string>();
     let nextUrl: URL | undefined = this.createInitialUrl();
     let expectedProxyCount: number | undefined;
@@ -107,9 +169,22 @@ export class WebshareCountryProvider {
       receivedProxyCount += page.results.length;
       for (const result of page.results) {
         const code = String(result.country_code ?? "").trim().toUpperCase();
-        if (/^[A-Z]{2}$/.test(code)) {
-          countryCodes.add(code);
+        const username = typeof result.username === "string" ? result.username : "";
+        const password = typeof result.password === "string" ? result.password : "";
+        if (!isIsoCountryCode(code) || result.valid !== true || username === "" || password === "") {
+          continue;
         }
+        const rawId = typeof result.id === "string" || typeof result.id === "number"
+          ? String(result.id).trim()
+          : "";
+        const identity = rawId ? `id:${rawId}` : `credentials:${code}:${username}:${password}`;
+        if (proxyIdentities.has(identity)) {
+          continue;
+        }
+        proxyIdentities.add(identity);
+        const proxies = proxiesByCountry.get(code) ?? [];
+        proxies.push({ identity, username, password });
+        proxiesByCountry.set(code, proxies);
       }
       nextUrl = page.next ? new URL(page.next, nextUrl) : undefined;
     }
@@ -119,12 +194,13 @@ export class WebshareCountryProvider {
     }
 
     const displayNames = new Intl.DisplayNames(["en"], { type: "region" });
-    return [...countryCodes]
+    const countries = [...proxiesByCountry.keys()]
       .map((countryCode) => ({
         countryCode,
         countryName: displayNames.of(countryCode) ?? countryCode
       }))
       .sort((a, b) => a.countryName.localeCompare(b.countryName) || a.countryCode.localeCompare(b.countryCode));
+    return { countries, proxiesByCountry };
   }
 
   private createInitialUrl(): URL {
@@ -177,7 +253,7 @@ async function readProxyListPage(response: Response): Promise<ProxyListPage> {
   return {
     count: record.count === undefined ? undefined : Number(record.count),
     next: record.next as string | null,
-    results: record.results.filter((entry): entry is { country_code?: unknown } => Boolean(entry && typeof entry === "object"))
+    results: record.results.filter((entry): entry is ProxyListResult => Boolean(entry && typeof entry === "object"))
   };
 }
 

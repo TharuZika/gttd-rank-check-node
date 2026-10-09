@@ -259,7 +259,7 @@ test("derives the project config fallback independently of the launch directory"
   }
 });
 
-test("uses the env-backed Webshare template without requiring static countries", () => {
+test("uses API-selected Webshare records without constructing synthetic credentials", () => {
   const { proxyProvider: _proxyProvider, countries: _countries, ...configWithoutStaticProxy } = baseConfig;
   const webshare = resolveWebshareConfig({
     WEBSHARE_MODE: "backbone",
@@ -276,8 +276,5 @@ test("uses the env-backed Webshare template without requiring static countries",
 
   assert.deepEqual(config.countries, []);
   assert.equal(config.webshare?.defaultCountry, "US");
-  assert.equal(
-    config.proxyProvider.upstreamUrlTemplate,
-    "http://proxyuser-{country}-{session}:p%40ss%20word@p.webshare.io:80"
-  );
+  assert.equal(config.proxyProvider.upstreamUrlTemplate, undefined);
 });

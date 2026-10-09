@@ -24,6 +24,8 @@ Only the Node gateway should be exposed through Cloudflare Tunnel or ngrok. Brow
 
 The required Webshare variables are `WEBSHARE_MODE=backbone`, `WEBSHARE_HOST`, `WEBSHARE_PORT`, `WEBSHARE_USERNAME`, `WEBSHARE_PASSWORD`, `WEBSHARE_API_KEY`, and `DEFAULT_COUNTRY`. Set `WEBSHARE_PLAN_ID` when the API key has multiple plans and the desired plan is not the account default. A partial Webshare environment is rejected at startup; if none of these variables are present, the legacy `proxyProvider.upstreamUrlTemplate` configuration remains available.
 
+In Webshare mode, the service fetches each valid allocated Backbone record and uses that record's exact `username` and `password` through `WEBSHARE_HOST:WEBSHARE_PORT` (normally `p.webshare.io:80`). It does not append country or sticky-session suffixes to a username, and it does not connect to the record's Direct-mode `proxy_address`/`port`. `WEBSHARE_USERNAME` and `WEBSHARE_PASSWORD` remain required for backward-compatible environment validation, but API-returned record credentials are used for relay connections. Set `WEBSHARE_PLAN_ID` explicitly when possible so selection cannot move to another plan.
+
 Never commit the production `.env` or `config.json`. If credentials were previously committed, rotate the Webshare proxy password and API key because deleting the working-tree file does not remove values from Git history.
 
 ### Running Directly From a Clone
@@ -41,6 +43,8 @@ npm run dev
 ```
 
 Use `npm run prod` to build and start the compiled service. Set `logging.directory` to `logs` in a project-local config if the current Windows user cannot write to the ProgramData log directory.
+
+`RANK_NODE_CONFIG` must point to a JSON configuration file such as `D:\path\to\gttd-rank-check-node\config.json`; do not point it to `dist\src\config.js`. When running directly from the clone, the project-local `.env` is used if the ProgramData `.env` does not exist.
 
 If no config exists, startup exits with a `config_not_found` message listing the accepted locations instead of an unhandled `ENOENT` stack trace.
 
@@ -114,6 +118,7 @@ Expected production checks:
 - `/ready` returns `503` before a country is selected, then `200` after `/proxy?country=US`.
 - `/countries` includes the countries allocated to the configured plan (including `US` when it is allocated).
 - `/countries` contains every country currently allocated to the selected Webshare plan. The list is cached for five minutes; a stale valid cache is used during temporary Webshare API failures with a one-minute retry backoff.
+- `/proxy?country=US` uses the exact credentials of a valid allocated US record through `p.webshare.io` (or the configured Backbone host). A response from Webshare activity with `no_proxies_allocated` usually means a synthesized or obsolete username was used.
 - `/proxy?country=US` returns `rotationAttempts` and `ipChanged`. `ipChanged` is `null` for the first activation, `true` for a changed IP, and `false` when all three verified attempts returned the previous IP.
 - Logs under `C:\ProgramData\Findrhost\RankCheckNode\logs` do not contain API tokens, proxy passwords, or full credentialed proxy URLs.
 
@@ -128,6 +133,8 @@ When the Node service starts, the terminal prints readable logs for:
 During normal operation, each request prints `request_received` and `request_completed` events with the request ID, method, pathname, response status, and duration. Client errors and server errors are printed as warnings or errors. Proxy and BrowserOS MCP startup status checks are not repeated for every request.
 
 Country activation prints `proxy_country_activated`, `proxy_ip_changed`, or `proxy_ip_unchanged`. An unchanged IP is a warning but does not stop the bulk check after three successful country-verification attempts. A country mismatch or unavailable country list returns an error and prevents BrowserOS work from starting.
+
+If an upstream CONNECT is rejected, `proxy_upstream_connect_rejected` includes only the HTTP status code (for example `407`). It does not include the proxy username, password, authorization header, or upstream response headers.
 
 Terminal and file logs redact API tokens, authorization values, proxy credentials, and credentialed proxy URLs. Request bodies are not logged.
 

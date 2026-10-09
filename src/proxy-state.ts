@@ -20,10 +20,17 @@ export interface VerifyEgressRequest {
   localProxyUrl: string;
 }
 
+export interface ResolveUpstreamProxyRequest {
+  countryCode: string;
+  sessionId: string;
+  attempt: number;
+}
+
 export interface ProxyStateManagerOptions {
   countries: CountryConfig[];
   loadCountries?: () => Promise<CountryConfig[]>;
-  upstreamUrlTemplate: string;
+  upstreamUrlTemplate?: string;
+  resolveUpstreamProxy?: (request: ResolveUpstreamProxyRequest) => Promise<string>;
   relay: RelayController;
   verifyEgress: (request: VerifyEgressRequest) => Promise<EgressVerificationResult>;
   createSessionId?: () => string;
@@ -56,7 +63,8 @@ export interface ProxySnapshot {
 export class ProxyStateManager {
   private readonly countries: CountryConfig[];
   private readonly loadCountries?: () => Promise<CountryConfig[]>;
-  private readonly upstreamUrlTemplate: string;
+  private readonly upstreamUrlTemplate?: string;
+  private readonly resolveUpstreamProxy?: (request: ResolveUpstreamProxyRequest) => Promise<string>;
   private readonly relay: RelayController;
   private readonly verifyEgress: (request: VerifyEgressRequest) => Promise<EgressVerificationResult>;
   private readonly createSessionId: () => string;
@@ -68,6 +76,10 @@ export class ProxyStateManager {
     this.countries = options.countries;
     this.loadCountries = options.loadCountries;
     this.upstreamUrlTemplate = options.upstreamUrlTemplate;
+    this.resolveUpstreamProxy = options.resolveUpstreamProxy;
+    if (!this.upstreamUrlTemplate && !this.resolveUpstreamProxy) {
+      throw new AppError(500, "proxy_provider_missing", "A proxy provider must be configured");
+    }
     this.relay = options.relay;
     this.verifyEgress = options.verifyEgress;
     this.createSessionId = options.createSessionId ?? (() => randomInt(1, 2_147_483_647).toString());
@@ -122,7 +134,9 @@ export class ProxyStateManager {
       for (let attempt = 1; attempt <= MAX_ROTATION_ATTEMPTS; attempt += 1) {
         rotationAttempts = attempt;
         sessionId = this.createSessionId();
-        upstreamProxyUrl = expandProxyTemplate(this.upstreamUrlTemplate, countryCode, sessionId);
+        upstreamProxyUrl = this.resolveUpstreamProxy
+          ? await this.resolveUpstreamProxy({ countryCode, sessionId, attempt })
+          : expandProxyTemplate(this.upstreamUrlTemplate!, countryCode, sessionId);
         this.relay.closeActiveTunnels();
         await this.relay.updateUpstream(upstreamProxyUrl);
         verification = await this.verifyEgress({

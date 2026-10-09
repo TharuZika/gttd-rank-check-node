@@ -71,6 +71,42 @@ test("retries numeric sticky sessions until the verified IP changes", async () =
   assert.ok(relayUpdates.every((url) => /session-\d+/.test(url)));
 });
 
+test("uses exact asynchronously selected proxy records instead of expanding the legacy template", async () => {
+  const selectedUrls = [
+    "http://allocated-user-1:allocated-password-1@p.webshare.io:80",
+    "http://allocated-user-2:allocated-password-2@p.webshare.io:80"
+  ];
+  const resolverRequests: Array<{ countryCode: string; sessionId: string; attempt: number }> = [];
+  const relayUpdates: string[] = [];
+  const manager = new ProxyStateManager({
+    countries,
+    upstreamUrlTemplate: "http://generated-{country}-{session}:wrong@p.webshare.io:80",
+    resolveUpstreamProxy: async (request) => {
+      resolverRequests.push(request);
+      return selectedUrls.shift() ?? "http://allocated-user-3:allocated-password-3@p.webshare.io:80";
+    },
+    relay: {
+      updateUpstream: async (url) => {
+        relayUpdates.push(url);
+      },
+      closeActiveTunnels: () => undefined
+    },
+    createSessionId: () => "123456",
+    verifyEgress: async ({ countryCode }) => ({
+      ok: true,
+      observedCountryCode: countryCode,
+      observedIp: "203.0.113.12"
+    })
+  });
+
+  const result = await manager.activateCountry("us");
+
+  assert.equal(result.sessionId, "123456");
+  assert.deepEqual(resolverRequests, [{ countryCode: "US", sessionId: "123456", attempt: 1 }]);
+  assert.deepEqual(relayUpdates, ["http://allocated-user-1:allocated-password-1@p.webshare.io:80"]);
+  assert.doesNotMatch(relayUpdates[0], /generated-US-123456/);
+});
+
 test("continues with a warning when three verified sessions return the same IP", async () => {
   let nextSessionId = 2000;
   const warnings: string[] = [];

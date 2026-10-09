@@ -29,7 +29,7 @@ export interface AppConfig {
     requestTimeoutMs: number;
   };
   proxyProvider: {
-    upstreamUrlTemplate: string;
+    upstreamUrlTemplate?: string;
   };
   webshare?: WebshareConfig;
   egressVerification: {

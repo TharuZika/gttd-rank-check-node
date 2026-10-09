@@ -148,8 +148,11 @@ export class ProxyRelay {
 
       upstreamSocket.off("data", onData);
       const statusLine = responseBuffer.subarray(0, responseBuffer.indexOf("\r\n")).toString("utf8");
-      const success = /^HTTP\/1\.[01] 2\d\d/i.test(statusLine);
+      const statusMatch = /^HTTP\/1\.[01]\s+(\d{3})/i.exec(statusLine);
+      const statusCode = statusMatch ? Number(statusMatch[1]) : undefined;
+      const success = statusCode !== undefined && statusCode >= 200 && statusCode < 300;
       if (!success) {
+        this.logger.warn("proxy_upstream_connect_rejected", { statusCode });
         clientSocket.end(`HTTP/1.1 502 Upstream CONNECT Failed\r\n\r\n`);
         upstreamSocket.destroy();
         return;
@@ -201,6 +204,14 @@ function proxyAuthorizationHeader(upstream: URL): string | undefined {
   if (!upstream.username && !upstream.password) {
     return undefined;
   }
-  const credentials = `${decodeURIComponent(upstream.username)}:${decodeURIComponent(upstream.password)}`;
+  const credentials = `${decodeUrlCredential(upstream.username)}:${decodeUrlCredential(upstream.password)}`;
   return `Basic ${Buffer.from(credentials, "utf8").toString("base64")}`;
+}
+
+function decodeUrlCredential(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
