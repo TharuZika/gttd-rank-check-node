@@ -26,6 +26,9 @@ export interface VerifyEgressViaProxyOptions {
   tlsConnector?: TlsConnector;
 }
 
+const EGRESS_USER_AGENT = "gttd-rank-check-node/1.0";
+const MAX_RETRY_AFTER_MS = 10_000;
+
 export async function verifyEgressViaProxy(options: VerifyEgressViaProxyOptions): Promise<EgressVerificationResult> {
   const verificationUrl = new URL(options.verificationUrl);
   const proxyUrl = new URL(options.localProxyUrl);
@@ -42,6 +45,38 @@ export async function verifyEgressViaProxy(options: VerifyEgressViaProxyOptions)
     : await requestHttpViaProxy(proxyUrl, verificationUrl, options.timeoutMs);
 
   return parseEgressVerificationBody(body, options.expectedCountryCode, options.countryCodePath);
+}
+
+function createEgressHttpError(
+  targetUrl: URL,
+  statusCode: number | undefined,
+  retryAfterHeader: string | string[] | undefined
+): AppError {
+  const retryAfterMs = parseRetryAfterMs(retryAfterHeader);
+  return new AppError(
+    502,
+    statusCode === 429 ? "egress_rate_limited" : "egress_http_error",
+    "Egress verification failed",
+    {
+      statusCode,
+      verificationHost: targetUrl.hostname,
+      ...(retryAfterMs === undefined ? {} : { retryAfterMs })
+    }
+  );
+}
+
+function parseRetryAfterMs(value: string | string[] | undefined): number | undefined {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (!raw) return undefined;
+
+  const seconds = Number(raw.trim());
+  if (Number.isFinite(seconds)) {
+    return Math.min(Math.max(0, Math.round(seconds * 1000)), MAX_RETRY_AFTER_MS);
+  }
+
+  const timestamp = Date.parse(raw);
+  if (!Number.isFinite(timestamp)) return undefined;
+  return Math.min(Math.max(0, timestamp - Date.now()), MAX_RETRY_AFTER_MS);
 }
 
 export function parseEgressVerificationBody(
@@ -82,7 +117,8 @@ function requestHttpViaProxy(proxyUrl: URL, targetUrl: URL, timeoutMs: number): 
       path: targetUrl.href,
       headers: {
         host: targetUrl.host,
-        accept: "application/json"
+        accept: "application/json",
+        "user-agent": EGRESS_USER_AGENT
       },
       timeout: timeoutMs
     }, (res) => {
@@ -91,7 +127,7 @@ function requestHttpViaProxy(proxyUrl: URL, targetUrl: URL, timeoutMs: number): 
       res.on("end", () => {
         const body = Buffer.concat(chunks).toString("utf8");
         if ((res.statusCode ?? 500) >= 400) {
-          reject(new AppError(502, "egress_http_error", "Egress verification failed", { statusCode: res.statusCode }));
+          reject(createEgressHttpError(targetUrl, res.statusCode, res.headers["retry-after"]));
           return;
         }
         resolve(body);
@@ -198,7 +234,8 @@ function requestHttpsOverTunnel(socket: TLSSocket, targetUrl: URL, timeoutMs: nu
       path: `${targetUrl.pathname}${targetUrl.search}` || "/",
       headers: {
         accept: "application/json",
-        host: targetUrl.host
+        host: targetUrl.host,
+        "user-agent": EGRESS_USER_AGENT
       },
       agent,
       timeout: timeoutMs
@@ -209,7 +246,7 @@ function requestHttpsOverTunnel(socket: TLSSocket, targetUrl: URL, timeoutMs: nu
         const body = Buffer.concat(chunks).toString("utf8");
         if ((res.statusCode ?? 500) >= 400) {
           agent.destroy();
-          reject(new AppError(502, "egress_http_error", "Egress verification failed", { statusCode: res.statusCode }));
+          reject(createEgressHttpError(targetUrl, res.statusCode, res.headers["retry-after"]));
           return;
         }
         agent.destroy();

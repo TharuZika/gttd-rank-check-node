@@ -40,6 +40,7 @@ export interface ProxyStateManagerOptions {
   verifyEgress: (request: VerifyEgressRequest) => Promise<EgressVerificationResult>;
   createSessionId?: () => string;
   logger?: Pick<JsonLogger, "info" | "warn">;
+  sleep?: (milliseconds: number) => Promise<void>;
 }
 
 export interface ProxyActivationResult {
@@ -83,6 +84,7 @@ export class ProxyStateManager {
   private readonly verifyEgress: (request: VerifyEgressRequest) => Promise<EgressVerificationResult>;
   private readonly createSessionId: () => string;
   private readonly logger?: Pick<JsonLogger, "info" | "warn">;
+  private readonly sleep: (milliseconds: number) => Promise<void>;
   private current?: ProxySnapshot;
   private switching = false;
 
@@ -101,6 +103,7 @@ export class ProxyStateManager {
     this.verifyEgress = options.verifyEgress;
     this.createSessionId = options.createSessionId ?? (() => randomInt(1, 2_147_483_647).toString());
     this.logger = options.logger;
+    this.sleep = options.sleep ?? ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
   }
 
   async listCountries(): Promise<CountryConfig[]> {
@@ -162,12 +165,28 @@ export class ProxyStateManager {
           : expandProxyTemplate(this.upstreamUrlTemplate!, countryCode, sessionId);
         this.relay.closeActiveTunnels();
         await this.relay.updateUpstream(upstreamProxyUrl);
-        verification = await this.verifyEgress({
-          countryCode,
-          sessionId,
-          upstreamProxyUrl,
-          localProxyUrl: this.relay.localProxyUrl ?? ""
-        });
+        try {
+          verification = await this.verifyEgress({
+            countryCode,
+            sessionId,
+            upstreamProxyUrl,
+            localProxyUrl: this.relay.localProxyUrl ?? ""
+          });
+        } catch (error) {
+          if (!isRateLimitedEgress(error) || attempt >= MAX_ROTATION_ATTEMPTS) {
+            throw error;
+          }
+
+          const retryAfterMs = getRetryAfterMs(error);
+          this.logger?.warn("proxy_egress_rate_limited", {
+            verificationHost: getVerificationHost(error),
+            statusCode: getStatusCode(error),
+            retryAfterMs,
+            rotationAttempt: attempt
+          });
+          await this.sleep(retryAfterMs);
+          continue;
+        }
 
         if (!verification.ok || verification.observedCountryCode !== countryCode) {
           this.current = undefined;
@@ -275,6 +294,26 @@ export class ProxyStateManager {
       this.switching = false;
     }
   }
+}
+
+const DEFAULT_EGRESS_RETRY_DELAY_MS = 1000;
+
+function isRateLimitedEgress(error: unknown): error is AppError {
+  return error instanceof AppError && error.code === "egress_rate_limited";
+}
+
+function getRetryAfterMs(error: AppError): number {
+  return typeof error.details?.retryAfterMs === "number"
+    ? Math.min(Math.max(0, error.details.retryAfterMs), 10_000)
+    : DEFAULT_EGRESS_RETRY_DELAY_MS;
+}
+
+function getStatusCode(error: AppError): number | undefined {
+  return typeof error.details?.statusCode === "number" ? error.details.statusCode : undefined;
+}
+
+function getVerificationHost(error: AppError): string {
+  return typeof error.details?.verificationHost === "string" ? error.details.verificationHost : "unknown";
 }
 
 function describeUpstream(value: string, mode?: WebshareConfig["mode"]): UpstreamEndpointMetadata {
