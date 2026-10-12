@@ -9,14 +9,21 @@ export interface LocalEndpoint {
 }
 
 export interface WebshareConfig {
-  mode: "backbone";
-  host: string;
-  port: number;
+  mode: "direct" | "backbone";
+  host?: string;
+  port?: number;
   username: string;
   password: string;
   apiKey: string;
   defaultCountry: string;
   planId?: string;
+}
+
+export interface UpstreamEndpointMetadata {
+  mode?: WebshareConfig["mode"];
+  protocol: string;
+  host: string;
+  port: number;
 }
 
 export interface AppConfig {
@@ -48,4 +55,6 @@ export interface EgressVerificationResult {
   ok: boolean;
   observedCountryCode: string;
   observedIp?: string;
+  errorCode?: string;
+  error?: string;
 }

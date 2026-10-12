@@ -30,6 +30,12 @@ function testConfig(browserMcpUrl: string, browserRequestTimeoutMs = 1000) {
   });
 }
 
+const successfulBrowserEgress = async ({ countryCode }: { countryCode: string }) => ({
+  ok: true,
+  observedCountryCode: countryCode,
+  observedIp: "203.0.113.200"
+});
+
 async function listen(server: ReturnType<typeof createServer>) {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
@@ -61,7 +67,8 @@ test("serves health publicly and protects countries, ready, proxy, and browser e
     countries: config.countries,
     upstreamUrlTemplate: config.proxyProvider.upstreamUrlTemplate,
     relay,
-    verifyEgress: async () => ({ ok: true, observedCountryCode: "US", observedIp: "203.0.113.40" })
+    verifyEgress: async () => ({ ok: true, observedCountryCode: "US", observedIp: "203.0.113.40" }),
+    verifyBrowserEgress: successfulBrowserEgress
   });
   const app = createGatewayServer({ config, proxyState: manager, logger: new JsonLogger({ directory: "", retentionFiles: 0, terminal: false }) });
   const gateway = await listen(app);
@@ -139,7 +146,8 @@ test("streams BrowserOS MCP responses through /browser only after proxy readines
     countries: config.countries,
     upstreamUrlTemplate: config.proxyProvider.upstreamUrlTemplate,
     relay,
-    verifyEgress: async () => ({ ok: true, observedCountryCode: "US", observedIp: "203.0.113.50" })
+    verifyEgress: async () => ({ ok: true, observedCountryCode: "US", observedIp: "203.0.113.50" }),
+    verifyBrowserEgress: successfulBrowserEgress
   });
   const app = createGatewayServer({ config, proxyState: manager, logger: new JsonLogger({ directory: "", retentionFiles: 0, terminal: false }) });
   const gateway = await listen(app);
@@ -182,7 +190,8 @@ test("reports BrowserOS as not ready for a broken MCP path", async () => {
     countries: config.countries,
     upstreamUrlTemplate: config.proxyProvider.upstreamUrlTemplate,
     relay,
-    verifyEgress: async () => ({ ok: true, observedCountryCode: "US", observedIp: "203.0.113.60" })
+    verifyEgress: async () => ({ ok: true, observedCountryCode: "US", observedIp: "203.0.113.60" }),
+    verifyBrowserEgress: successfulBrowserEgress
   });
   const app = createGatewayServer({ config, proxyState: manager, logger: new JsonLogger({ directory: "", retentionFiles: 0, terminal: false }) });
   const gateway = await listen(app);
@@ -204,6 +213,41 @@ test("reports BrowserOS as not ready for a broken MCP path", async () => {
   }
 });
 
+test("blocks BrowserOS after a failed BrowserOS activation probe", async () => {
+  const config = testConfig("http://127.0.0.1:3211/mcp");
+  const relay = new ProxyRelay({ host: "127.0.0.1", port: 0 }, new JsonLogger({ directory: "", retentionFiles: 0, terminal: false }));
+  const manager = new ProxyStateManager({
+    countries: config.countries,
+    upstreamUrlTemplate: config.proxyProvider.upstreamUrlTemplate,
+    relay,
+    verifyEgress: async () => ({ ok: true, observedCountryCode: "US", observedIp: "203.0.113.61" }),
+    verifyBrowserEgress: async () => ({ ok: false, observedCountryCode: "US" })
+  });
+  const app = createGatewayServer({
+    config,
+    proxyState: manager,
+    logger: new JsonLogger({ directory: "", retentionFiles: 0, terminal: false })
+  });
+  const gateway = await listen(app);
+
+  try {
+    const activation = await request(`${gateway.url}/proxy?country=US`, {
+      headers: { authorization: `Bearer ${apiToken}` }
+    });
+    assert.equal(activation.status, 502);
+
+    const browser = await request(`${gateway.url}/browser`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${apiToken}`, "content-type": "application/json" },
+      body: "{}"
+    });
+    assert.equal(browser.status, 503);
+    assert.equal((await browser.json() as { error: string }).error, "proxy_not_ready");
+  } finally {
+    await gateway.close();
+  }
+});
+
 test("returns 504 when BrowserOS accepts a /browser request but stalls before headers", async () => {
   const browser = createServer((_req: IncomingMessage, _res: ServerResponse) => {
     // Keep the socket open without sending headers.
@@ -215,7 +259,8 @@ test("returns 504 when BrowserOS accepts a /browser request but stalls before he
     countries: config.countries,
     upstreamUrlTemplate: config.proxyProvider.upstreamUrlTemplate,
     relay,
-    verifyEgress: async () => ({ ok: true, observedCountryCode: "US", observedIp: "203.0.113.70" })
+    verifyEgress: async () => ({ ok: true, observedCountryCode: "US", observedIp: "203.0.113.70" }),
+    verifyBrowserEgress: successfulBrowserEgress
   });
   const stderr: string[] = [];
   const app = createGatewayServer({
@@ -319,7 +364,8 @@ test("logs received and completed requests plus request errors", async () => {
     countries: config.countries,
     upstreamUrlTemplate: config.proxyProvider.upstreamUrlTemplate,
     relay,
-    verifyEgress: async () => ({ ok: true, observedCountryCode: "US" })
+    verifyEgress: async () => ({ ok: true, observedCountryCode: "US" }),
+    verifyBrowserEgress: successfulBrowserEgress
   });
   const logger = new JsonLogger({
     directory: "",
@@ -368,7 +414,8 @@ test("logs the sanitized upstream status for egress verification HTTP failures",
     relay,
     verifyEgress: async () => {
       throw new AppError(502, "egress_http_error", "Egress verification failed", { statusCode: 429 });
-    }
+    },
+    verifyBrowserEgress: successfulBrowserEgress
   });
   const app = createGatewayServer({
     config,

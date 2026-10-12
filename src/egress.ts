@@ -41,18 +41,27 @@ export async function verifyEgressViaProxy(options: VerifyEgressViaProxyOptions)
       : requestHttpsViaProxy(httpsRequestOptions, options.tlsConnector ?? tlsConnect))
     : await requestHttpViaProxy(proxyUrl, verificationUrl, options.timeoutMs);
 
+  return parseEgressVerificationBody(body, options.expectedCountryCode, options.countryCodePath);
+}
+
+export function parseEgressVerificationBody(
+  body: string,
+  expectedCountryCode: string,
+  countryCodePath: string,
+  errorPrefix = "egress"
+): EgressVerificationResult {
   let payload: unknown;
   try {
     payload = JSON.parse(body);
   } catch {
-    throw new AppError(502, "egress_invalid_response", "Egress verification did not return JSON");
+    throw new AppError(502, `${errorPrefix}_invalid_response`, "Egress verification did not return JSON");
   }
 
-  const observedCountryCode = String(readPath(payload, options.countryCodePath) ?? "").toUpperCase();
+  const observedCountryCode = String(readPath(payload, countryCodePath) ?? "").toUpperCase();
   const observedIp = String(readPath(payload, "ip") ?? readPath(payload, "query") ?? readPath(payload, "origin") ?? "");
-  if (observedCountryCode !== options.expectedCountryCode) {
-    throw new AppError(502, "egress_country_mismatch", "Egress country mismatch", {
-      expectedCountryCode: options.expectedCountryCode,
+  if (observedCountryCode !== expectedCountryCode) {
+    throw new AppError(502, `${errorPrefix}_country_mismatch`, "Egress country mismatch", {
+      expectedCountryCode,
       observedCountryCode
     });
   }

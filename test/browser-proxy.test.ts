@@ -1,0 +1,138 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { BrowserMcpProxy } from "../src/browser-proxy.js";
+import { AppError } from "../src/errors.js";
+
+async function listen(server: ReturnType<typeof createServer>) {
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.equal(typeof address, "object");
+  return `http://127.0.0.1:${(address as { port: number }).port}/mcp`;
+}
+
+function proxy(url: string, fetchImpl?: typeof fetch) {
+  return new BrowserMcpProxy({
+    mcpUrl: new URL(url),
+    requestTimeoutMs: 1000
+  }, undefined, { fetch: fetchImpl, probePollIntervalMs: 1 });
+}
+
+function mcpServer(body: string, options: { malformed?: boolean } = {}) {
+  let closed = false;
+  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    const request = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+      method: string;
+      params?: { name?: string };
+    };
+    if (options.malformed) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end("not-json");
+      return;
+    }
+    let result: unknown = {};
+    if (request.method === "tools/list") {
+      result = { tools: [
+        { name: "new_hidden_page" },
+        { name: "list_pages" },
+        { name: "evaluate_script" },
+        { name: "close_page" }
+      ] };
+    } else if (request.method === "tools/call" && request.params?.name === "new_hidden_page") {
+      result = { structuredContent: { pageId: 42 } };
+    } else if (request.method === "tools/call" && request.params?.name === "list_pages") {
+      result = { structuredContent: { pages: [{ pageId: 42, isLoading: false, loadProgress: 1 }] } };
+    } else if (request.method === "tools/call" && request.params?.name === "evaluate_script") {
+      result = { structuredContent: { text: body } };
+    } else if (request.method === "tools/call" && request.params?.name === "close_page") {
+      closed = true;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ jsonrpc: "2.0", result }));
+  });
+  return { server, wasClosed: () => closed };
+}
+
+test("probes BrowserOS egress and cleans up the temporary page", async () => {
+  const fixture = mcpServer(JSON.stringify({ country_code: "US", ip: "198.51.100.90" }));
+  const url = await listen(fixture.server);
+  try {
+    const result = await proxy(url).verifyEgress({
+      verificationUrl: "https://geo.example/json",
+      expectedCountryCode: "US",
+      countryCodePath: "country_code",
+      timeoutMs: 1000
+    });
+    assert.deepEqual(result, { ok: true, observedCountryCode: "US", observedIp: "198.51.100.90" });
+    assert.equal(fixture.wasClosed(), true);
+  } finally {
+    await new Promise<void>((resolve, reject) => fixture.server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("returns a sanitized malformed-response error and still closes the page", async () => {
+  const fixture = mcpServer("not-json");
+  const url = await listen(fixture.server);
+  try {
+    await assert.rejects(
+      () => proxy(url).verifyEgress({
+        verificationUrl: "https://geo.example/json",
+        expectedCountryCode: "US",
+        countryCodePath: "country_code",
+        timeoutMs: 1000
+      }),
+      (error) => {
+        assert.equal((error as AppError).code, "browseros_probe_malformed_response");
+        assert.doesNotMatch(String(error), /geo\.example|secret/i);
+        return true;
+      }
+    );
+    assert.equal(fixture.wasClosed(), true);
+  } finally {
+    await new Promise<void>((resolve, reject) => fixture.server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("reports a country mismatch from BrowserOS verification", async () => {
+  const fixture = mcpServer(JSON.stringify({ country_code: "GB", ip: "198.51.100.91" }));
+  const url = await listen(fixture.server);
+  try {
+    await assert.rejects(
+      () => proxy(url).verifyEgress({
+        verificationUrl: "https://geo.example/json",
+        expectedCountryCode: "US",
+        countryCodePath: "country_code",
+        timeoutMs: 1000
+      }),
+      (error) => {
+        assert.equal((error as AppError).code, "browseros_egress_country_mismatch");
+        return true;
+      }
+    );
+    assert.equal(fixture.wasClosed(), true);
+  } finally {
+    await new Promise<void>((resolve, reject) => fixture.server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("maps an MCP timeout to a BrowserOS probe timeout", async () => {
+  const fetchImpl = async () => {
+    const error = new Error("aborted");
+    error.name = "AbortError";
+    throw error;
+  };
+  await assert.rejects(
+    () => proxy("http://127.0.0.1:1/mcp", fetchImpl).verifyEgress({
+      verificationUrl: "https://geo.example/json",
+      expectedCountryCode: "US",
+      countryCodePath: "country_code",
+      timeoutMs: 1000
+    }),
+    (error) => {
+      assert.equal((error as AppError).code, "browseros_probe_timeout");
+      return true;
+    }
+  );
+});

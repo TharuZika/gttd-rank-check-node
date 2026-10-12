@@ -212,6 +212,56 @@ test("selects exact allocated Backbone credentials through the configured Websha
   assert.doesNotMatch(first.username, /-US-|-[A-Za-z]{2}-\d+$/);
 });
 
+test("selects the allocated proxy_address and port in direct mode", async () => {
+  const provider = new WebshareCountryProvider({
+    apiKey: "api-key",
+    mode: "direct",
+    fetch: async () => jsonResponse({
+      count: 1,
+      next: null,
+      results: [proxyRecord({ proxy_address: "198.51.100.25", port: 10001 })]
+    })
+  });
+
+  const selected = new URL(await provider.selectProxy("US"));
+
+  assert.equal(selected.hostname, "198.51.100.25");
+  assert.equal(Number(selected.port), 10001);
+  assert.equal(decodeURIComponent(selected.username), "allocated-user-1");
+  assert.equal(decodeURIComponent(selected.password), "allocated-password-1");
+});
+
+test("forces a fresh Webshare list for activation without using stale cache", async () => {
+  let calls = 0;
+  const provider = new WebshareCountryProvider({
+    apiKey: "api-key",
+    mode: "direct",
+    fetch: async () => {
+      calls += 1;
+      if (calls === 2) throw new Error("refresh failed");
+      return jsonResponse({ count: 1, next: null, results: [proxyRecord()] });
+    }
+  });
+
+  await provider.listCountries();
+  await assert.rejects(() => provider.refresh(), /Unable to load allocated Webshare countries/i);
+  assert.equal(calls, 2);
+});
+
+test("rejects direct records without a valid endpoint", async () => {
+  const provider = new WebshareCountryProvider({
+    apiKey: "api-key",
+    mode: "direct",
+    fetch: async () => jsonResponse({
+      count: 1,
+      next: null,
+      results: [proxyRecord({ proxy_address: "", port: 0 })]
+    })
+  });
+
+  assert.deepEqual(await provider.listCountries(), []);
+});
+
 test("ignores unusable allocated records and returns a sanitized selection error", async () => {
   const provider = new WebshareCountryProvider({
     apiKey: "secret-api-key",

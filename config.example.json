@@ -6,7 +6,7 @@
   },
   "proxyRelay": {
     "host": "127.0.0.1",
-    "port": 8788
+    "port": 8890
   },
   "browserOs": {
     "mcpUrl": "http://127.0.0.1:9010/mcp",

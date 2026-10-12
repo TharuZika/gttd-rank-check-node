@@ -39,12 +39,16 @@ interface ProxyListResult {
   valid?: unknown;
   username?: unknown;
   password?: unknown;
+  proxy_address?: unknown;
+  port?: unknown;
 }
 
 interface WebshareProxyRecord {
   identity: string;
   username: string;
   password: string;
+  proxyAddress?: string;
+  port?: number;
 }
 
 interface ProxySnapshot {
@@ -96,6 +100,10 @@ export class WebshareCountryProvider {
     return cloneCountries(snapshot.countries);
   }
 
+  async refresh(): Promise<void> {
+    await this.loadSnapshot(true);
+  }
+
   async selectProxy(rawCountryCode: string): Promise<string> {
     const countryCode = normalizeCountryCode(rawCountryCode);
     const snapshot = await this.loadSnapshot();
@@ -115,17 +123,22 @@ export class WebshareCountryProvider {
     const proxy = proxies[(lastIndex + 1) % proxies.length];
     this.lastSelectedProxyIdentityByCountry.set(countryCode, proxy.identity);
 
-    const upstream = new URL(`http://${this.proxyHost}:${this.proxyPort}`);
+    const proxyHost = this.mode === "direct" ? proxy.proxyAddress : this.proxyHost;
+    const proxyPort = this.mode === "direct" ? proxy.port : this.proxyPort;
+    if (!proxyHost || !proxyPort) {
+      throw new AppError(502, "webshare_proxy_invalid", "Selected Webshare proxy record has no usable endpoint");
+    }
+    const upstream = new URL(`http://${formatHost(proxyHost)}:${proxyPort}`);
     upstream.username = encodeURIComponent(proxy.username);
     upstream.password = encodeURIComponent(proxy.password);
     return upstream.href;
   }
 
-  private async loadSnapshot(): Promise<ProxySnapshot> {
-    if (this.cached && this.now() - this.cached.refreshedAt < this.cacheTtlMs) {
+  private async loadSnapshot(forceRefresh = false): Promise<ProxySnapshot> {
+    if (!forceRefresh && this.cached && this.now() - this.cached.refreshedAt < this.cacheTtlMs) {
       return this.cached;
     }
-    if (this.cached && this.now() < this.nextRefreshAllowedAt) {
+    if (!forceRefresh && this.cached && this.now() < this.nextRefreshAllowedAt) {
       return this.cached;
     }
 
@@ -136,7 +149,7 @@ export class WebshareCountryProvider {
       this.nextRefreshAllowedAt = 0;
       return this.cached;
     } catch (error) {
-      if (this.cached) {
+      if (this.cached && !forceRefresh) {
         this.nextRefreshAllowedAt = this.now() + this.refreshBackoffMs;
         this.logger?.warn("webshare_countries_stale_cache", {
           cachedCountryCount: this.cached.countries.length,
@@ -171,7 +184,12 @@ export class WebshareCountryProvider {
         const code = String(result.country_code ?? "").trim().toUpperCase();
         const username = typeof result.username === "string" ? result.username : "";
         const password = typeof result.password === "string" ? result.password : "";
-        if (!isIsoCountryCode(code) || result.valid !== true || username === "" || password === "") {
+        if (!isIsoCountryCode(code) || result.valid !== true || username.trim() === "" || password.trim() === "") {
+          continue;
+        }
+        const proxyAddress = readProxyAddress(result.proxy_address);
+        const port = readProxyPort(result.port);
+        if (this.mode === "direct" && (!proxyAddress || port === undefined)) {
           continue;
         }
         const rawId = typeof result.id === "string" || typeof result.id === "number"
@@ -183,7 +201,7 @@ export class WebshareCountryProvider {
         }
         proxyIdentities.add(identity);
         const proxies = proxiesByCountry.get(code) ?? [];
-        proxies.push({ identity, username, password });
+        proxies.push({ identity, username, password, proxyAddress, port });
         proxiesByCountry.set(code, proxies);
       }
       nextUrl = page.next ? new URL(page.next, nextUrl) : undefined;
@@ -277,4 +295,22 @@ function cloneCountries(countries: CountryConfig[]): CountryConfig[] {
 
 function safeErrorCode(error: unknown): string {
   return error instanceof AppError ? error.code : "webshare_request_failed";
+}
+
+function readProxyAddress(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const address = value.trim();
+  if (!address || /[\s/:@]/.test(address)) return undefined;
+  return address;
+}
+
+function readProxyPort(value: unknown): number | undefined {
+  if (!Number.isInteger(value) || typeof value !== "number" || value < 1 || value > 65535) {
+    return undefined;
+  }
+  return value;
+}
+
+function formatHost(host: string): string {
+  return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
 }

@@ -114,6 +114,27 @@ test("enables Webshare only when every required environment value is present", (
   );
 });
 
+test("accepts direct mode without a configured backbone endpoint", () => {
+  const webshare = resolveWebshareConfig({
+    WEBSHARE_MODE: "direct",
+    WEBSHARE_USERNAME: "proxyuser",
+    WEBSHARE_PASSWORD: "proxy-password",
+    WEBSHARE_API_KEY: "api-key",
+    DEFAULT_COUNTRY: "us"
+  });
+
+  assert.deepEqual(webshare, {
+    mode: "direct",
+    host: undefined,
+    port: undefined,
+    username: "proxyuser",
+    password: "proxy-password",
+    apiKey: "api-key",
+    defaultCountry: "US",
+    planId: undefined
+  });
+});
+
 test("loads the ProgramData environment first and uses the project file as a fallback", () => {
   const root = mkdtempSync(join(tmpdir(), "rank-node-env-"));
   const servicePath = join(root, "service.env");

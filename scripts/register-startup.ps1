@@ -5,8 +5,7 @@ param(
   [string]$ConfigPath = "C:\ProgramData\Findrhost\RankCheckNode\config.json",
   [string]$NodeExe = "node.exe",
   [string]$BrowserOsExePath = "C:\Program Files\BrowserOS\BrowserOS.exe",
-  [string]$BrowserUser = "",
-  [string]$BrowserOsArgs = "--proxy-server=http://127.0.0.1:8788"
+  [string]$BrowserUser = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -39,15 +38,31 @@ if ($BrowserUser -ne "") {
   if (-not (Test-Path -LiteralPath $BrowserOsExePath)) {
     throw "BrowserOS executable not found at $BrowserOsExePath."
   }
-  $browserAction = New-ScheduledTaskAction -Execute $BrowserOsExePath -Argument $BrowserOsArgs
+  $config = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
+  $relay = $config.proxyRelay
+  if ($null -eq $relay -or $null -eq $relay.port) {
+    throw "Config proxyRelay.host and proxyRelay.port are required to derive BrowserOS proxy arguments."
+  }
+  $relayHost = if ([string]::IsNullOrWhiteSpace([string]$relay.host)) { "127.0.0.1" } else { [string]$relay.host }
+  if ($relayHost -notin @("127.0.0.1", "localhost", "::1", "[::1]")) {
+    throw "BrowserOS must use a localhost proxy relay. Refusing proxyRelay host '$relayHost'."
+  }
+  $relayPort = [int]$relay.port
+  if ($relayPort -lt 1 -or $relayPort -gt 65535) {
+    throw "Config proxyRelay.port must be between 1 and 65535."
+  }
+  $relayHostForUrl = if ($relayHost.Contains(":") -and -not $relayHost.StartsWith("[")) { "[$relayHost]" } else { $relayHost }
+  $browserOsArgs = "--proxy-server=http://$relayHostForUrl`:$relayPort"
+  $browserAction = New-ScheduledTaskAction -Execute $BrowserOsExePath -Argument $browserOsArgs
   $browserTrigger = New-ScheduledTaskTrigger -AtLogOn -User $BrowserUser
   $browserSettings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
-  Register-ScheduledTask -TaskName $BrowserTaskName -Action $browserAction -Trigger $browserTrigger -Settings $browserSettings -Force | Out-Null
+  $browserPrincipal = New-ScheduledTaskPrincipal -UserId $BrowserUser -LogonType InteractiveToken -RunLevel Limited
+  Register-ScheduledTask -TaskName $BrowserTaskName -Action $browserAction -Trigger $browserTrigger -Settings $browserSettings -Principal $browserPrincipal -Force | Out-Null
 }
 
 Write-Host "Registered $TaskName."
 if ($BrowserUser -ne "") {
-  Write-Host "Registered $BrowserTaskName for $BrowserUser."
+  Write-Host "Registered $BrowserTaskName for restricted user $BrowserUser with $browserOsArgs."
 }
 else {
   Write-Warning "BrowserOS task skipped. Re-run with -BrowserUser after creating the restricted desktop account."

@@ -18,7 +18,9 @@ const WEBSHARE_ENV_KEYS = [
   "DEFAULT_COUNTRY",
   "WEBSHARE_PLAN_ID"
 ] as const;
-const REQUIRED_WEBSHARE_ENV_KEYS = WEBSHARE_ENV_KEYS.filter((key) => key !== "WEBSHARE_PLAN_ID");
+const REQUIRED_WEBSHARE_ENV_KEYS = WEBSHARE_ENV_KEYS.filter((key) =>
+  !["WEBSHARE_HOST", "WEBSHARE_PORT", "WEBSHARE_PLAN_ID"].includes(key)
+);
 const ISO_3166_ALPHA_2 = new Set(
   "AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW".split(" ")
 );
@@ -201,27 +203,35 @@ export function resolveWebshareConfig(environment: Environment): WebshareConfig 
     return undefined;
   }
 
-  const missing = REQUIRED_WEBSHARE_ENV_KEYS.filter((key) => cleanEnvironmentValue(environment[key]) === undefined);
+  const mode = environment.WEBSHARE_MODE!.trim().toLowerCase();
+  if (mode !== "direct" && mode !== "backbone") {
+    throw new AppError(400, "invalid_config", "WEBSHARE_MODE must be direct or backbone");
+  }
+
+  const requiredKeys = mode === "backbone"
+    ? [...REQUIRED_WEBSHARE_ENV_KEYS, "WEBSHARE_HOST", "WEBSHARE_PORT"]
+    : REQUIRED_WEBSHARE_ENV_KEYS;
+  const missing = requiredKeys.filter((key) => cleanEnvironmentValue(environment[key]) === undefined);
   if (missing.length > 0) {
     throw new AppError(400, "invalid_config", `Incomplete Webshare configuration. Missing: ${missing.join(", ")}`);
   }
 
-  const mode = environment.WEBSHARE_MODE!.trim().toLowerCase();
-  if (mode !== "backbone") {
-    throw new AppError(400, "invalid_config", "WEBSHARE_MODE must be backbone");
+  const hostValue = cleanEnvironmentValue(environment.WEBSHARE_HOST);
+  const portValue = cleanEnvironmentValue(environment.WEBSHARE_PORT);
+  if (hostValue !== undefined && !/^[a-z0-9.\-:[\]]+$/i.test(hostValue)) {
+    throw new AppError(400, "invalid_config", "WEBSHARE_HOST must be a hostname or IP address");
   }
-  const host = environment.WEBSHARE_HOST!.trim();
-  if (!/^[a-z0-9.-]+$/i.test(host)) {
-    throw new AppError(400, "invalid_config", "WEBSHARE_HOST must be a hostname");
-  }
-  const port = Number(environment.WEBSHARE_PORT);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new AppError(400, "invalid_config", "WEBSHARE_PORT must be between 1 and 65535");
+  let port: number | undefined;
+  if (portValue !== undefined) {
+    port = Number(portValue);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      throw new AppError(400, "invalid_config", "WEBSHARE_PORT must be between 1 and 65535");
+    }
   }
 
   return {
     mode,
-    host,
+    host: hostValue,
     port,
     username: environment.WEBSHARE_USERNAME!.trim(),
     password: environment.WEBSHARE_PASSWORD!.trim(),

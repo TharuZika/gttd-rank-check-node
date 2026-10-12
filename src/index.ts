@@ -54,6 +54,8 @@ export async function startService(config: AppConfig, logger = new JsonLogger(co
     const proxyState = new ProxyStateManager({
       countries: config.countries,
       loadCountries: countryProvider ? () => countryProvider.listCountries() : undefined,
+      refreshProxyList: countryProvider ? () => countryProvider.refresh() : undefined,
+      upstreamMode: config.webshare?.mode,
       upstreamUrlTemplate: config.proxyProvider.upstreamUrlTemplate,
       resolveUpstreamProxy: countryProvider
         ? ({ countryCode }) => countryProvider.selectProxy(countryCode)
@@ -66,6 +68,12 @@ export async function startService(config: AppConfig, logger = new JsonLogger(co
         expectedCountryCode: countryCode,
         timeoutMs: config.egressVerification.timeoutMs,
         countryCodePath: config.egressVerification.countryCodePath
+      }),
+      verifyBrowserEgress: ({ countryCode }) => browserProxy.verifyEgress({
+        verificationUrl: config.egressVerification.url.href,
+        expectedCountryCode: countryCode,
+        countryCodePath: config.egressVerification.countryCodePath,
+        timeoutMs: config.browserOs.requestTimeoutMs
       })
     });
 
