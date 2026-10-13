@@ -29,6 +29,11 @@ function mcpServer(body: string, options: { malformed?: boolean; malformedConten
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const chunks: Buffer[] = [];
     for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    if (req.method === "GET") {
+      res.writeHead(406, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "unsupported request" }));
+      return;
+    }
     if (req.method === "DELETE") {
       if (options.stateful && readHeader(req, "mcp-session-id") !== "session-42") {
         res.writeHead(404);
@@ -136,6 +141,19 @@ test("probes BrowserOS egress and cleans up the temporary page", async () => {
     assert.deepEqual(fixture.methods.slice(0, 2), ["initialize", "notifications/initialized"]);
     assert.deepEqual(fixture.notificationHasIds, [false]);
     assert.ok(fixture.sessionHeaders.slice(1).every((value) => value === "session-42"));
+  } finally {
+    await new Promise<void>((resolve, reject) => fixture.server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("checks BrowserOS readiness through an MCP initialize session instead of GET", async () => {
+  const fixture = mcpServer(JSON.stringify({ country_code: "US", ip: "198.51.100.90" }), { stateful: true });
+  const url = await listen(fixture.server);
+  try {
+    const result = await proxy(url).checkReady();
+    assert.deepEqual(result, { ok: true, statusCode: 200 });
+    assert.deepEqual(fixture.methods, ["initialize", "notifications/initialized"]);
+    assert.equal(fixture.wasSessionClosed(), true);
   } finally {
     await new Promise<void>((resolve, reject) => fixture.server.close((error) => error ? reject(error) : resolve()));
   }

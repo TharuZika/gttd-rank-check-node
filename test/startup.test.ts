@@ -32,7 +32,28 @@ function config(browserMcpUrl: string): AppConfig {
 }
 
 test("logs startup proxy, BrowserOS MCP, and gateway statuses once", async () => {
-  const browser = createServer((_req: IncomingMessage, res: ServerResponse) => {
+  const browser = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    if (req.method === "POST") {
+      const request = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { method: string };
+      if (request.method === "initialize") {
+        res.writeHead(200, {
+          "content-type": "application/json",
+          "mcp-session-id": "startup-session"
+        });
+        res.end(JSON.stringify({ jsonrpc: "2.0", result: { protocolVersion: "2025-06-18" } }));
+        return;
+      }
+      res.writeHead(202);
+      res.end();
+      return;
+    }
+    if (req.method === "DELETE") {
+      res.writeHead(202);
+      res.end();
+      return;
+    }
     res.writeHead(200);
     res.end("ok");
   });

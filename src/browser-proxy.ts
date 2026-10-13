@@ -50,26 +50,33 @@ export class BrowserMcpProxy {
   }
 
   async checkReady(timeoutMs = Math.min(this.requestTimeoutMs, 1500)): Promise<{ ok: boolean; statusCode?: number; error?: string }> {
-    return new Promise((resolve) => {
-      const request = selectRequest(this.mcpUrl);
-      const req = request({
-        method: "GET",
-        protocol: this.mcpUrl.protocol,
-        hostname: this.mcpUrl.hostname,
-        port: this.mcpUrl.port,
-        path: `${this.mcpUrl.pathname}${this.mcpUrl.search}`,
-        timeout: timeoutMs
-      }, (res) => {
-        res.resume();
-        resolve({ ok: isReadyStatus(res.statusCode), statusCode: res.statusCode });
-      });
-      req.on("timeout", () => {
-        req.destroy();
-        resolve({ ok: false, error: "timeout" });
-      });
-      req.on("error", (error) => resolve({ ok: false, error: error.message }));
-      req.end();
-    });
+    let sessionId: string | undefined;
+    try {
+      const initialized = await this.requestMcp("initialize", {
+        protocolVersion: MCP_PROTOCOL_VERSION,
+        capabilities: {},
+        clientInfo: { name: "gttd-rank-check-node", version: "1.0.0" }
+      }, timeoutMs);
+      sessionId = initialized.sessionId;
+      if (sessionId) {
+        await this.sendMcpNotification("notifications/initialized", {}, timeoutMs, sessionId);
+      }
+      return { ok: true, statusCode: initialized.statusCode };
+    } catch (error) {
+      if (error instanceof AppError) {
+        const statusCode = typeof error.details?.statusCode === "number" ? error.details.statusCode : undefined;
+        return { ok: false, statusCode, error: error.code };
+      }
+      return { ok: false, error: "browseros_probe_unavailable" };
+    } finally {
+      if (sessionId) {
+        try {
+          await this.closeMcpSession(sessionId, timeoutMs);
+        } catch {
+          // Readiness is already determined by the handshake; cleanup is best effort.
+        }
+      }
+    }
   }
 
   async verifyEgress(options: BrowserEgressProbeOptions): Promise<EgressVerificationResult> {
@@ -237,7 +244,7 @@ export class BrowserMcpProxy {
     timeoutMs: number,
     sessionId?: string,
     notification = false
-  ): Promise<{ payload: McpPayload; sessionId?: string }> {
+  ): Promise<{ payload: McpPayload; sessionId?: string; statusCode: number }> {
     let response: Response;
     let responseText = "";
     try {
@@ -280,7 +287,8 @@ export class BrowserMcpProxy {
 
     return {
       payload: responseText.trim() ? parseMcpResponse(responseText) : {},
-      sessionId: response.headers.get("mcp-session-id") ?? sessionId
+      sessionId: response.headers.get("mcp-session-id") ?? sessionId,
+      statusCode: response.status
     };
   }
 
@@ -419,10 +427,6 @@ function extractMcpBody(value: unknown): string {
 
 function selectRequest(url: URL) {
   return url.protocol === "https:" ? httpsRequest : httpRequest;
-}
-
-function isReadyStatus(statusCode: number | undefined): boolean {
-  return statusCode !== undefined && ((statusCode >= 200 && statusCode < 300) || statusCode === 405);
 }
 
 function forwardRequestHeaders(headers: IncomingMessage["headers"]): Record<string, string | string[]> {
