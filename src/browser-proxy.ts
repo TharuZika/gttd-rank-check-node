@@ -18,6 +18,7 @@ const HOP_HEADERS = new Set([
   "transfer-encoding",
   "upgrade"
 ]);
+const MCP_PROTOCOL_VERSION = "2025-06-18";
 
 type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -74,14 +75,19 @@ export class BrowserMcpProxy {
   async verifyEgress(options: BrowserEgressProbeOptions): Promise<EgressVerificationResult> {
     let pageId: number | null = null;
     let closeToolName: string | undefined;
+    let sessionId: string | undefined;
     try {
-      await this.callMcp("initialize", {
-        protocolVersion: "2024-11-05",
+      const initialized = await this.requestMcp("initialize", {
+        protocolVersion: MCP_PROTOCOL_VERSION,
         capabilities: {},
         clientInfo: { name: "gttd-rank-check-node", version: "1.0.0" }
-      }, options.timeoutMs).catch(() => undefined);
+      }, options.timeoutMs);
+      sessionId = initialized.sessionId;
+      if (sessionId) {
+        await this.sendMcpNotification("notifications/initialized", {}, options.timeoutMs, sessionId);
+      }
 
-      const toolsResult = await this.callMcp("tools/list", {}, options.timeoutMs);
+      const toolsResult = await this.callMcp("tools/list", {}, options.timeoutMs, sessionId);
       const tools = readTools(toolsResult);
       const openTool = pickTool(tools, [/^new_page$/i, /^new_hidden_page$/i]);
       const contentTool = pickTool(tools, [/^get_page_content$/i, /^take_enhanced_snapshot$/i, /^take_snapshot$/i]);
@@ -99,14 +105,14 @@ export class BrowserMcpProxy {
         arguments: openTool.name.toLowerCase() === "new_page"
           ? { url: options.verificationUrl, background: true, hidden: true }
           : { url: options.verificationUrl }
-      }, options.timeoutMs);
+      }, options.timeoutMs, sessionId);
       pageId = extractPageId(opened);
       if (pageId === null) {
         throw new AppError(502, "browseros_probe_malformed_response", "BrowserOS MCP did not return a page identifier");
       }
 
       if (listTool) {
-        await this.waitForPage(pageId, options.timeoutMs);
+        await this.waitForPage(pageId, options.timeoutMs, sessionId);
       }
 
       const content = evaluateTool
@@ -116,13 +122,13 @@ export class BrowserMcpProxy {
             page: pageId,
             expression: "(() => document.body ? document.body.innerText : '')()"
           }
-        }, options.timeoutMs)
+        }, options.timeoutMs, sessionId)
         : await this.callMcp("tools/call", {
           name: contentTool!.name,
           arguments: contentTool!.name.toLowerCase() === "get_page_content"
             ? { page: pageId, viewportOnly: false, includeLinks: false, includeImages: false }
             : { page: pageId }
-        }, options.timeoutMs);
+        }, options.timeoutMs, sessionId);
 
       const body = extractMcpBody(content);
       try {
@@ -149,11 +155,20 @@ export class BrowserMcpProxy {
           await this.callMcp("tools/call", {
             name: closeToolName,
             arguments: { page: pageId }
-          }, Math.min(options.timeoutMs, this.requestTimeoutMs));
+          }, Math.min(options.timeoutMs, this.requestTimeoutMs), sessionId);
         } catch (error) {
           this.logger?.warn("browseros_probe_cleanup_failed", {
             pageId,
             error: error instanceof AppError ? error.code : "browseros_cleanup_failed"
+          });
+        }
+      }
+      if (sessionId) {
+        try {
+          await this.closeMcpSession(sessionId, Math.min(options.timeoutMs, this.requestTimeoutMs));
+        } catch (error) {
+          this.logger?.warn("browseros_probe_session_cleanup_failed", {
+            error: error instanceof AppError ? error.code : "browseros_session_cleanup_failed"
           });
         }
       }
@@ -206,22 +221,46 @@ export class BrowserMcpProxy {
     req.pipe(upstreamReq);
   }
 
-  private async callMcp(method: string, params: Record<string, unknown>, timeoutMs: number): Promise<unknown> {
+  private async callMcp(method: string, params: Record<string, unknown>, timeoutMs: number, sessionId?: string): Promise<unknown> {
+    const response = await this.requestMcp(method, params, timeoutMs, sessionId);
+    if (response.payload.error) {
+      throw new AppError(502, "browseros_probe_failed", "BrowserOS MCP probe call failed", {
+        mcpMethod: method
+      });
+    }
+    return response.payload.result;
+  }
+
+  private async requestMcp(
+    method: string,
+    params: Record<string, unknown>,
+    timeoutMs: number,
+    sessionId?: string,
+    notification = false
+  ): Promise<{ payload: McpPayload; sessionId?: string }> {
     let response: Response;
     let responseText = "";
     try {
+      const headers: Record<string, string> = {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream"
+      };
+      if (sessionId) {
+        headers["mcp-session-id"] = sessionId;
+        headers["mcp-protocol-version"] = MCP_PROTOCOL_VERSION;
+      }
+      const message: Record<string, unknown> = {
+        jsonrpc: "2.0",
+        method,
+        params
+      };
+      if (!notification) {
+        message.id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      }
       response = await this.fetch(this.mcpUrl, {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-          accept: "application/json, text/event-stream"
-        },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-          method,
-          params
-        }),
+        headers,
+        body: JSON.stringify(message),
         signal: AbortSignal.timeout(timeoutMs)
       });
       responseText = await response.text();
@@ -234,25 +273,57 @@ export class BrowserMcpProxy {
 
     if (!response.ok) {
       throw new AppError(502, "browseros_probe_http_error", "BrowserOS MCP probe request failed", {
-        statusCode: response.status
+        statusCode: response.status,
+        mcpMethod: method
       });
     }
 
-    const payload = parseMcpResponse(responseText);
-    if (payload.error) {
-      throw new AppError(502, "browseros_probe_failed", "BrowserOS MCP probe call failed");
-    }
-    return payload.result;
+    return {
+      payload: responseText.trim() ? parseMcpResponse(responseText) : {},
+      sessionId: response.headers.get("mcp-session-id") ?? sessionId
+    };
   }
 
-  private async waitForPage(pageId: number, timeoutMs: number): Promise<void> {
+  private async sendMcpNotification(
+    method: string,
+    params: Record<string, unknown>,
+    timeoutMs: number,
+    sessionId: string
+  ): Promise<void> {
+    await this.requestMcp(method, params, timeoutMs, sessionId, true);
+  }
+
+  private async closeMcpSession(sessionId: string, timeoutMs: number): Promise<void> {
+    let response: Response;
+    try {
+      response = await this.fetch(this.mcpUrl, {
+        method: "DELETE",
+        headers: {
+          accept: "application/json, text/event-stream",
+          "mcp-session-id": sessionId,
+          "mcp-protocol-version": MCP_PROTOCOL_VERSION
+        },
+        signal: AbortSignal.timeout(timeoutMs)
+      });
+    } catch {
+      throw new AppError(503, "browseros_session_cleanup_failed", "BrowserOS MCP session cleanup failed");
+    }
+
+    if (!response.ok && response.status !== 404) {
+      throw new AppError(503, "browseros_session_cleanup_failed", "BrowserOS MCP session cleanup failed", {
+        statusCode: response.status
+      });
+    }
+  }
+
+  private async waitForPage(pageId: number, timeoutMs: number, sessionId?: string): Promise<void> {
     const startedAt = Date.now();
     while (Date.now() - startedAt < timeoutMs) {
       const remainingMs = Math.max(1, timeoutMs - (Date.now() - startedAt));
       const result = await this.callMcp("tools/call", {
         name: "list_pages",
         arguments: {}
-      }, remainingMs);
+      }, remainingMs, sessionId);
       const pages = readStructuredContent(result)?.pages;
       const page = Array.isArray(pages)
         ? pages.find((candidate) => Number(candidate?.pageId) === pageId)

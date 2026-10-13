@@ -18,18 +18,63 @@ function proxy(url: string, fetchImpl?: typeof fetch) {
   }, undefined, { fetch: fetchImpl, probePollIntervalMs: 1 });
 }
 
-function mcpServer(body: string, options: { malformed?: boolean } = {}) {
+function mcpServer(body: string, options: { malformed?: boolean; malformedContent?: boolean; stateful?: boolean; rejectInitialize?: boolean } = {}) {
   let closed = false;
+  let sessionClosed = false;
+  let initialized = false;
+  const methods: string[] = [];
+  const initializeProtocolVersions: string[] = [];
+  const notificationHasIds: boolean[] = [];
+  const sessionHeaders: Array<string | undefined> = [];
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const chunks: Buffer[] = [];
     for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    if (req.method === "DELETE") {
+      if (options.stateful && readHeader(req, "mcp-session-id") !== "session-42") {
+        res.writeHead(404);
+        res.end("session not found");
+        return;
+      }
+      sessionClosed = true;
+      res.writeHead(202);
+      res.end();
+      return;
+    }
     const request = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
       method: string;
+      id?: unknown;
       params?: { name?: string };
     };
-    if (options.malformed) {
+    const sessionHeader = readHeader(req, "mcp-session-id");
+    methods.push(request.method);
+    sessionHeaders.push(sessionHeader);
+    if (request.method === "notifications/initialized") {
+      notificationHasIds.push(Object.prototype.hasOwnProperty.call(request, "id"));
+    }
+    if (request.method === "initialize") {
+      initializeProtocolVersions.push(String((request.params as { protocolVersion?: unknown } | undefined)?.protocolVersion));
+    }
+    if (options.stateful && request.method !== "initialize" && sessionHeader !== "session-42") {
+      res.writeHead(422, { "content-type": "text/plain" });
+      res.end("Unexpected message, expect initialize request");
+      return;
+    }
+    if (options.rejectInitialize && request.method === "initialize") {
+      res.writeHead(422, { "content-type": "text/plain" });
+      res.end("Unexpected message, expect initialize request");
+      return;
+    }
+    if (options.malformed || (options.malformedContent && request.method === "tools/call" && request.params?.name === "evaluate_script")) {
       res.writeHead(200, { "content-type": "application/json" });
       res.end("not-json");
+      return;
+    }
+    if (request.method === "initialize") {
+      initialized = true;
+    }
+    if (request.method === "notifications/initialized") {
+      res.writeHead(202);
+      res.end();
       return;
     }
     let result: unknown = {};
@@ -49,14 +94,32 @@ function mcpServer(body: string, options: { malformed?: boolean } = {}) {
     } else if (request.method === "tools/call" && request.params?.name === "close_page") {
       closed = true;
     }
-    res.writeHead(200, { "content-type": "application/json" });
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    if (options.stateful && request.method === "initialize") {
+      headers["mcp-session-id"] = "session-42";
+    }
+    res.writeHead(200, headers);
     res.end(JSON.stringify({ jsonrpc: "2.0", result }));
   });
-  return { server, wasClosed: () => closed };
+  return {
+    server,
+    wasClosed: () => closed,
+    wasSessionClosed: () => sessionClosed,
+    wasInitialized: () => initialized,
+    methods,
+    initializeProtocolVersions,
+    notificationHasIds,
+    sessionHeaders
+  };
+}
+
+function readHeader(req: IncomingMessage, name: string): string | undefined {
+  const value = req.headers[name];
+  return Array.isArray(value) ? value[0] : value;
 }
 
 test("probes BrowserOS egress and cleans up the temporary page", async () => {
-  const fixture = mcpServer(JSON.stringify({ country_code: "US", ip: "198.51.100.90" }));
+  const fixture = mcpServer(JSON.stringify({ country_code: "US", ip: "198.51.100.90" }), { stateful: true });
   const url = await listen(fixture.server);
   try {
     const result = await proxy(url).verifyEgress({
@@ -67,6 +130,60 @@ test("probes BrowserOS egress and cleans up the temporary page", async () => {
     });
     assert.deepEqual(result, { ok: true, observedCountryCode: "US", observedIp: "198.51.100.90" });
     assert.equal(fixture.wasClosed(), true);
+    assert.equal(fixture.wasInitialized(), true);
+    assert.equal(fixture.wasSessionClosed(), true);
+    assert.deepEqual(fixture.initializeProtocolVersions, ["2025-06-18"]);
+    assert.deepEqual(fixture.methods.slice(0, 2), ["initialize", "notifications/initialized"]);
+    assert.deepEqual(fixture.notificationHasIds, [false]);
+    assert.ok(fixture.sessionHeaders.slice(1).every((value) => value === "session-42"));
+  } finally {
+    await new Promise<void>((resolve, reject) => fixture.server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("fails during initialization without attempting tools/list and redacts credentialed URLs", async () => {
+  const fixture = mcpServer("", { stateful: true, rejectInitialize: true });
+  const url = await listen(fixture.server);
+  try {
+    await assert.rejects(
+      () => proxy(url).verifyEgress({
+        verificationUrl: "https://user:secret@geo.example/json",
+        expectedCountryCode: "US",
+        countryCodePath: "country_code",
+        timeoutMs: 1000
+      }),
+      (error) => {
+        assert.equal((error as AppError).code, "browseros_probe_http_error");
+        assert.equal((error as AppError).details?.statusCode, 422);
+        assert.equal((error as AppError).details?.mcpMethod, "initialize");
+        assert.doesNotMatch(String(error), /user|secret|geo\.example/i);
+        return true;
+      }
+    );
+    assert.deepEqual(fixture.methods, ["initialize"]);
+  } finally {
+    await new Promise<void>((resolve, reject) => fixture.server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("cleans up the page and MCP session after content verification fails", async () => {
+  const fixture = mcpServer("not-json", { stateful: true, malformedContent: true });
+  const url = await listen(fixture.server);
+  try {
+    await assert.rejects(
+      () => proxy(url).verifyEgress({
+        verificationUrl: "https://geo.example/json",
+        expectedCountryCode: "US",
+        countryCodePath: "country_code",
+        timeoutMs: 1000
+      }),
+      (error) => {
+        assert.equal((error as AppError).code, "browseros_probe_malformed_response");
+        return true;
+      }
+    );
+    assert.equal(fixture.wasClosed(), true);
+    assert.equal(fixture.wasSessionClosed(), true);
   } finally {
     await new Promise<void>((resolve, reject) => fixture.server.close((error) => error ? reject(error) : resolve()));
   }
