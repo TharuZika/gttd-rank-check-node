@@ -97,7 +97,7 @@ function mcpServer(body: string, options: { malformed?: boolean; malformedConten
       if (action === "new") {
         result = { structuredContent: { page: 42 } };
       } else if (action === "list") {
-        result = { structuredContent: { pages: [{ page: 42, url: "https://geo.example/json" }] } };
+        result = { structuredContent: { pages: [] } };
       } else if (action === "close") {
         closed = true;
       }

@@ -120,7 +120,7 @@ export class BrowserMcpProxy {
         throw new AppError(502, "browseros_probe_malformed_response", "BrowserOS MCP did not return a page identifier");
       }
 
-      if (listTool) {
+      if (listTool && listTool.name.toLowerCase() !== "tabs") {
         await this.waitForPage(pageId, listTool, options.timeoutMs, sessionId);
       }
 
@@ -130,7 +130,7 @@ export class BrowserMcpProxy {
           arguments: evaluateTool.name.toLowerCase() === "evaluate"
             ? {
               page: pageId,
-              code: "return document.body ? document.body.innerText : '';",
+              code: modernPageBodyScript(options.timeoutMs),
               timeout: Math.min(options.timeoutMs, 30000)
             }
             : {
@@ -434,6 +434,19 @@ function pageIdentifier(value: unknown): number | undefined {
   ];
   const candidate = candidates.find((item) => item !== undefined && item !== null && Number.isFinite(Number(item)));
   return candidate === undefined ? undefined : Number(candidate);
+}
+
+function modernPageBodyScript(timeoutMs: number): string {
+  const waitBudgetMs = Math.max(100, timeoutMs - 250);
+  return [
+    `const deadline = Date.now() + ${waitBudgetMs};`,
+    "while (Date.now() < deadline) {",
+    "  const text = document.body?.innerText?.trim() ?? '';",
+    "  if (text) return text;",
+    "  await new Promise((resolve) => setTimeout(resolve, 100));",
+    "}",
+    "return document.body?.innerText ?? '';"
+  ].join("\\n");
 }
 
 function extractMcpBody(value: unknown): string {
