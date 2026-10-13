@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { randomUUID } from "node:crypto";
 import { isAuthorized } from "./auth.js";
 import { BrowserMcpProxy } from "./browser-proxy.js";
+import { diagnosticsHtml } from "./diagnostics.js";
 import { AppError, toAppError } from "./errors.js";
 import type { JsonLogger } from "./logger.js";
 import type { ProxyStateManager } from "./proxy-state.js";
@@ -67,6 +68,11 @@ async function routeRequest(
       return;
     }
 
+    if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/diagnostics")) {
+      sendHtml(res, 200, diagnosticsHtml);
+      return;
+    }
+
     if (!isAuthorized(req.headers, options.config.apiToken)) {
       sendJson(res, 401, { error: "unauthorized", requestId });
       return;
@@ -74,6 +80,12 @@ async function routeRequest(
 
     if (req.method === "GET" && url.pathname === "/countries") {
       sendJson(res, 200, { countries: await options.proxyState.listCountries() });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/mcp-status") {
+      const browser = await options.browserProxy.checkReady();
+      sendJson(res, browser.ok ? 200 : 503, { browser, requestId });
       return;
     }
 
@@ -143,4 +155,16 @@ function sendJson(res: ServerResponse, statusCode: number, payload: unknown): vo
     "cache-control": "no-store"
   });
   res.end(JSON.stringify(payload));
+}
+
+function sendHtml(res: ServerResponse, statusCode: number, html: string): void {
+  if (res.headersSent) {
+    res.end();
+    return;
+  }
+  res.writeHead(statusCode, {
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": "no-store"
+  });
+  res.end(html);
 }

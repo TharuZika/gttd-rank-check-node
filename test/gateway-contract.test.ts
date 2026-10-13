@@ -74,11 +74,33 @@ test("serves health publicly and protects countries, ready, proxy, and browser e
   const gateway = await listen(app);
 
   try {
+    const diagnostics = await request(`${gateway.url}/diagnostics`);
+    assert.equal(diagnostics.status, 200);
+    assert.match(diagnostics.headers.get("content-type") ?? "", /text\/html/);
+    const diagnosticsHtml = await diagnostics.text();
+    assert.match(diagnosticsHtml, /Check BrowserOS MCP/);
+    assert.doesNotMatch(diagnosticsHtml, new RegExp(apiToken));
+
+    const index = await request(`${gateway.url}/`);
+    assert.equal(index.status, 200);
+    assert.match(await index.text(), /Rank Check Node Diagnostics/);
+
     const health = await request(`${gateway.url}/health`);
     assert.equal(health.status, 200);
 
     const unauthorized = await request(`${gateway.url}/countries`);
     assert.equal(unauthorized.status, 401);
+
+    const unauthorizedMcpStatus = await request(`${gateway.url}/mcp-status`);
+    assert.equal(unauthorizedMcpStatus.status, 401);
+
+    const mcpStatus = await request(`${gateway.url}/mcp-status`, {
+      headers: { authorization: `Bearer ${apiToken}` }
+    });
+    assert.equal(mcpStatus.status, 200);
+    const mcpPayload = await mcpStatus.json() as { browser: { ok: boolean; statusCode?: number }; requestId: string };
+    assert.deepEqual(mcpPayload.browser, { ok: true, statusCode: 200 });
+    assert.match(mcpPayload.requestId, /^[0-9a-f-]{36}$/);
 
     const countries = await request(`${gateway.url}/countries`, {
       headers: { authorization: `Bearer ${apiToken}` }
@@ -197,6 +219,12 @@ test("reports BrowserOS as not ready for a broken MCP path", async () => {
   const gateway = await listen(app);
 
   try {
+    const mcpStatus = await request(`${gateway.url}/mcp-status`, {
+      headers: { authorization: `Bearer ${apiToken}` }
+    });
+    assert.equal(mcpStatus.status, 503);
+    assert.equal((await mcpStatus.json() as { browser: { ok: boolean } }).browser.ok, false);
+
     await request(`${gateway.url}/proxy?country=US`, {
       headers: { authorization: `Bearer ${apiToken}` }
     });

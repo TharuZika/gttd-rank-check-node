@@ -5,8 +5,10 @@
 This service exposes the POI ranking node contract expected by the dashboard:
 
 - `GET /health` without auth
+- `GET /` or `/diagnostics` for the local diagnostics page (the page itself is public; API actions still require the bearer token)
 - `GET /ready` with bearer auth
 - `GET /countries` with bearer auth
+- `GET /mcp-status` with bearer auth
 - `GET /proxy?country=US` with bearer auth
 - `GET|POST /browser` with bearer auth, proxied to BrowserOS MCP
 
@@ -105,6 +107,8 @@ In the existing POI ranking modal:
 The backend calls `/proxy?country=US` before using `/browser`, so active country state does not need to survive service restarts.
 
 ## Diagnostics
+
+For a browser-based check, open the gateway URL at `/diagnostics` (or `/`). Enter the configured node API token in the page without saving it, then use **Check BrowserOS MCP** for the MCP handshake or **Test proxy + egress** for the complete Webshare, Node, and BrowserOS verification. The page does not display or store Webshare credentials.
 
 Run:
 

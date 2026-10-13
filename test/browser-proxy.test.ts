@@ -18,7 +18,7 @@ function proxy(url: string, fetchImpl?: typeof fetch) {
   }, undefined, { fetch: fetchImpl, probePollIntervalMs: 1 });
 }
 
-function mcpServer(body: string, options: { malformed?: boolean; malformedContent?: boolean; stateful?: boolean; rejectInitialize?: boolean } = {}) {
+function mcpServer(body: string, options: { malformed?: boolean; malformedContent?: boolean; stateful?: boolean; rejectInitialize?: boolean; modern?: boolean } = {}) {
   let closed = false;
   let sessionClosed = false;
   let initialized = false;
@@ -69,7 +69,7 @@ function mcpServer(body: string, options: { malformed?: boolean; malformedConten
       res.end("Unexpected message, expect initialize request");
       return;
     }
-    if (options.malformed || (options.malformedContent && request.method === "tools/call" && request.params?.name === "evaluate_script")) {
+    if (options.malformed || (options.malformedContent && request.method === "tools/call" && (request.params?.name === "evaluate_script" || request.params?.name === "evaluate"))) {
       res.writeHead(200, { "content-type": "application/json" });
       res.end("not-json");
       return;
@@ -84,18 +84,31 @@ function mcpServer(body: string, options: { malformed?: boolean; malformedConten
     }
     let result: unknown = {};
     if (request.method === "tools/list") {
-      result = { tools: [
-        { name: "new_hidden_page" },
-        { name: "list_pages" },
-        { name: "evaluate_script" },
-        { name: "close_page" }
-      ] };
+      result = options.modern
+        ? { tools: [{ name: "tabs" }, { name: "read" }, { name: "evaluate" }] }
+        : { tools: [
+          { name: "new_hidden_page" },
+          { name: "list_pages" },
+          { name: "evaluate_script" },
+          { name: "close_page" }
+        ] };
+    } else if (request.method === "tools/call" && options.modern && request.params?.name === "tabs") {
+      const action = (request.params as { arguments?: { action?: string } }).arguments?.action;
+      if (action === "new") {
+        result = { structuredContent: { page: 42 } };
+      } else if (action === "list") {
+        result = { structuredContent: { pages: [{ page: 42, url: "https://geo.example/json" }] } };
+      } else if (action === "close") {
+        closed = true;
+      }
     } else if (request.method === "tools/call" && request.params?.name === "new_hidden_page") {
       result = { structuredContent: { pageId: 42 } };
     } else if (request.method === "tools/call" && request.params?.name === "list_pages") {
       result = { structuredContent: { pages: [{ pageId: 42, isLoading: false, loadProgress: 1 }] } };
     } else if (request.method === "tools/call" && request.params?.name === "evaluate_script") {
       result = { structuredContent: { text: body } };
+    } else if (request.method === "tools/call" && request.params?.name === "evaluate") {
+      result = { structuredContent: { value: body } };
     } else if (request.method === "tools/call" && request.params?.name === "close_page") {
       closed = true;
     }
@@ -141,6 +154,24 @@ test("probes BrowserOS egress and cleans up the temporary page", async () => {
     assert.deepEqual(fixture.methods.slice(0, 2), ["initialize", "notifications/initialized"]);
     assert.deepEqual(fixture.notificationHasIds, [false]);
     assert.ok(fixture.sessionHeaders.slice(1).every((value) => value === "session-42"));
+  } finally {
+    await new Promise<void>((resolve, reject) => fixture.server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("supports the modern BrowserOS tabs, read, and evaluate tools", async () => {
+  const fixture = mcpServer(JSON.stringify({ country_code: "US", ip: "198.51.100.90" }), { stateful: true, modern: true });
+  const url = await listen(fixture.server);
+  try {
+    const result = await proxy(url).verifyEgress({
+      verificationUrl: "https://geo.example/json",
+      expectedCountryCode: "US",
+      countryCodePath: "country_code",
+      timeoutMs: 1000
+    });
+    assert.deepEqual(result, { ok: true, observedCountryCode: "US", observedIp: "198.51.100.90" });
+    assert.equal(fixture.wasClosed(), true);
+    assert.equal(fixture.wasSessionClosed(), true);
   } finally {
     await new Promise<void>((resolve, reject) => fixture.server.close((error) => error ? reject(error) : resolve()));
   }

@@ -96,11 +96,11 @@ export class BrowserMcpProxy {
 
       const toolsResult = await this.callMcp("tools/list", {}, options.timeoutMs, sessionId);
       const tools = readTools(toolsResult);
-      const openTool = pickTool(tools, [/^new_page$/i, /^new_hidden_page$/i]);
-      const contentTool = pickTool(tools, [/^get_page_content$/i, /^take_enhanced_snapshot$/i, /^take_snapshot$/i]);
-      const evaluateTool = pickTool(tools, [/^evaluate_script$/i]);
-      const listTool = pickTool(tools, [/^list_pages$/i]);
-      const closeTool = pickTool(tools, [/^close_page$/i]);
+      const openTool = pickTool(tools, [/^new_page$/i, /^new_hidden_page$/i, /^tabs$/i]);
+      const contentTool = pickTool(tools, [/^get_page_content$/i, /^take_enhanced_snapshot$/i, /^take_snapshot$/i, /^read$/i]);
+      const evaluateTool = pickTool(tools, [/^evaluate_script$/i, /^evaluate$/i]);
+      const listTool = pickTool(tools, [/^list_pages$/i, /^tabs$/i]);
+      const closeTool = pickTool(tools, [/^close_page$/i, /^tabs$/i]);
       closeToolName = closeTool?.name;
 
       if (!openTool || (!contentTool && !evaluateTool)) {
@@ -109,7 +109,9 @@ export class BrowserMcpProxy {
 
       const opened = await this.callMcp("tools/call", {
         name: openTool.name,
-        arguments: openTool.name.toLowerCase() === "new_page"
+        arguments: openTool.name.toLowerCase() === "tabs"
+          ? { action: "new", url: options.verificationUrl, background: true }
+          : openTool.name.toLowerCase() === "new_page"
           ? { url: options.verificationUrl, background: true, hidden: true }
           : { url: options.verificationUrl }
       }, options.timeoutMs, sessionId);
@@ -119,22 +121,30 @@ export class BrowserMcpProxy {
       }
 
       if (listTool) {
-        await this.waitForPage(pageId, options.timeoutMs, sessionId);
+        await this.waitForPage(pageId, listTool, options.timeoutMs, sessionId);
       }
 
       const content = evaluateTool
         ? await this.callMcp("tools/call", {
           name: evaluateTool.name,
-          arguments: {
-            page: pageId,
-            expression: "(() => document.body ? document.body.innerText : '')()"
-          }
+          arguments: evaluateTool.name.toLowerCase() === "evaluate"
+            ? {
+              page: pageId,
+              code: "return document.body ? document.body.innerText : '';",
+              timeout: Math.min(options.timeoutMs, 30000)
+            }
+            : {
+              page: pageId,
+              expression: "(() => document.body ? document.body.innerText : '')()"
+            }
         }, options.timeoutMs, sessionId)
         : await this.callMcp("tools/call", {
           name: contentTool!.name,
-          arguments: contentTool!.name.toLowerCase() === "get_page_content"
-            ? { page: pageId, viewportOnly: false, includeLinks: false, includeImages: false }
-            : { page: pageId }
+          arguments: contentTool!.name.toLowerCase() === "read"
+            ? { page: pageId, format: "text" }
+            : contentTool!.name.toLowerCase() === "get_page_content"
+              ? { page: pageId, viewportOnly: false, includeLinks: false, includeImages: false }
+              : { page: pageId }
         }, options.timeoutMs, sessionId);
 
       const body = extractMcpBody(content);
@@ -161,7 +171,9 @@ export class BrowserMcpProxy {
         try {
           await this.callMcp("tools/call", {
             name: closeToolName,
-            arguments: { page: pageId }
+            arguments: closeToolName.toLowerCase() === "tabs"
+              ? { action: "close", page: pageId }
+              : { page: pageId }
           }, Math.min(options.timeoutMs, this.requestTimeoutMs), sessionId);
         } catch (error) {
           this.logger?.warn("browseros_probe_cleanup_failed", {
@@ -324,19 +336,19 @@ export class BrowserMcpProxy {
     }
   }
 
-  private async waitForPage(pageId: number, timeoutMs: number, sessionId?: string): Promise<void> {
+  private async waitForPage(pageId: number, listTool: { name: string }, timeoutMs: number, sessionId?: string): Promise<void> {
     const startedAt = Date.now();
     while (Date.now() - startedAt < timeoutMs) {
       const remainingMs = Math.max(1, timeoutMs - (Date.now() - startedAt));
       const result = await this.callMcp("tools/call", {
-        name: "list_pages",
-        arguments: {}
+        name: listTool.name,
+        arguments: listTool.name.toLowerCase() === "tabs" ? { action: "list" } : {}
       }, remainingMs, sessionId);
       const pages = readStructuredContent(result)?.pages;
       const page = Array.isArray(pages)
-        ? pages.find((candidate) => Number(candidate?.pageId) === pageId)
+        ? pages.find((candidate) => pageIdentifier(candidate) === pageId)
         : undefined;
-      if (page && (!page.isLoading && Number(page.loadProgress ?? 1) >= 0.9)) {
+      if (page && (listTool.name.toLowerCase() === "tabs" || (!page.isLoading && Number(page.loadProgress ?? 1) >= 0.9))) {
         return;
       }
       await new Promise((resolve) => setTimeout(resolve, Math.min(this.probePollIntervalMs, timeoutMs)));
@@ -372,14 +384,19 @@ function parseMcpResponse(value: string): McpPayload {
   }
 }
 
-function readTools(value: unknown): Array<{ name: string }> {
+interface McpTool {
+  name: string;
+  inputSchema?: unknown;
+}
+
+function readTools(value: unknown): McpTool[] {
   const tools = readStructuredContent(value)?.tools;
   if (!Array.isArray(tools)) return [];
   return tools
-    .filter((tool): tool is { name: string } => Boolean(tool && typeof tool === "object" && typeof tool.name === "string"));
+    .filter((tool): tool is McpTool => Boolean(tool && typeof tool === "object" && typeof tool.name === "string"));
 }
 
-function pickTool(tools: Array<{ name: string }>, patterns: RegExp[]): { name: string } | undefined {
+function pickTool(tools: McpTool[], patterns: RegExp[]): McpTool | undefined {
   return tools.find((tool) => patterns.some((pattern) => pattern.test(tool.name)));
 }
 
@@ -396,13 +413,27 @@ function readStructuredContent(value: unknown): Record<string, any> {
 
 function extractPageId(value: unknown): number | null {
   const structured = readStructuredContent(value);
-  const direct = structured.pageId ?? structured.page?.pageId;
+  const direct = pageIdentifier(structured);
   if (direct !== undefined && direct !== null && Number.isFinite(Number(direct))) {
     return Number(direct);
   }
   const text = extractMcpBody(value);
-  const match = text.match(/Page ID:\s*(\d+)/i);
+  const match = text.match(/(?:Page ID|opened page)[:\s]+(\d+)/i);
   return match ? Number(match[1]) : null;
+}
+
+function pageIdentifier(value: unknown): number | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  const page = record.page;
+  const candidates = [
+    record.pageId,
+    typeof page === "object" && page !== null ? (page as Record<string, unknown>).pageId : undefined,
+    typeof page === "object" && page !== null ? (page as Record<string, unknown>).id : undefined,
+    typeof page === "number" || typeof page === "string" ? page : undefined
+  ];
+  const candidate = candidates.find((item) => item !== undefined && item !== null && Number.isFinite(Number(item)));
+  return candidate === undefined ? undefined : Number(candidate);
 }
 
 function extractMcpBody(value: unknown): string {
