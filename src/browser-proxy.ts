@@ -502,7 +502,7 @@ function extractMcpBody(value: unknown): string {
 }
 
 function unwrapBrowserOsContent(value: string): string {
-  const match = value.match(/^\s*\[UNTRUSTED_PAGE_CONTENT[^\]]*\][^\r\n]*\r?\n([\s\S]*?)\r?\n\[END_UNTRUSTED_PAGE_CONTENT[^\]]*\]\s*$/i);
+  const match = value.match(/\[UNTRUSTED_PAGE_CONTENT[^\]]*\][^\r\n]*\r?\n([\s\S]*?)\r?\n\[END_UNTRUSTED_PAGE_CONTENT[^\]]*\]/i);
   return match?.[1] ?? value;
 }
 

@@ -116,7 +116,10 @@ function mcpServer(body: string, options: { malformed?: boolean; malformedConten
         ? { content: [{ type: "text", text: "evaluate: SyntaxError: Invalid or unexpected token" }], isError: true }
         : req.url?.includes("structured=1") && !options.unstructuredModern
           ? { structuredContent: { value: body } }
-          : { content: [{ type: "text", text: `[UNTRUSTED_PAGE_CONTENT origin=https://geo.example/json]\n${body}\n[END_UNTRUSTED_PAGE_CONTENT]` }] };
+          : { content: [
+            { type: "text", text: `[UNTRUSTED_PAGE_CONTENT origin=https://geo.example/json]\n${body}\n[END_UNTRUSTED_PAGE_CONTENT]` },
+            { type: "text", text: "Tip: additional BrowserOS context" }
+          ] };
     } else if (request.method === "tools/call" && request.params?.name === "close_page") {
       closed = true;
     }
