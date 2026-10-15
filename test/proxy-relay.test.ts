@@ -99,7 +99,7 @@ test("sends exact allocated credentials in upstream Basic authentication", async
     new JsonLogger({ directory: "", retentionFiles: 0, terminal: false })
   );
   await relay.start();
-  await relay.updateUpstream(await provider.selectProxy("US", "1001"));
+  await relay.updateUpstream(await provider.selectProxy("US"));
 
   try {
     const relayUrl = new URL(relay.localProxyUrl);
@@ -113,7 +113,7 @@ test("sends exact allocated credentials in upstream Basic authentication", async
 
     const authorization = /^Proxy-Authorization:\s*Basic\s+([^\r\n]+)$/im.exec(upstreamRequest)?.[1];
     assert.ok(authorization);
-    assert.equal(Buffer.from(authorization, "base64").toString("utf8"), `${username}-us-1001:${password}`);
+    assert.equal(Buffer.from(authorization, "base64").toString("utf8"), `${username}:${password}`);
   } finally {
     await relay.stop();
     await new Promise<void>((resolve, reject) => upstream.close((error) => error ? reject(error) : resolve()));

@@ -61,7 +61,7 @@ export async function startService(config: AppConfig, logger = new JsonLogger(co
       upstreamMode: config.webshare?.mode,
       upstreamUrlTemplate: config.proxyProvider.upstreamUrlTemplate,
       resolveUpstreamProxy: countryProvider
-        ? ({ countryCode, sessionId }) => countryProvider.selectProxy(countryCode, sessionId)
+        ? ({ countryCode }) => countryProvider.selectProxy(countryCode)
         : undefined,
       relay,
       logger,

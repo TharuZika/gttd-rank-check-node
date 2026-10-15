@@ -104,7 +104,7 @@ export class WebshareCountryProvider {
     await this.loadSnapshot(true);
   }
 
-  async selectProxy(rawCountryCode: string, sessionId?: string): Promise<string> {
+  async selectProxy(rawCountryCode: string): Promise<string> {
     const countryCode = normalizeCountryCode(rawCountryCode);
     const snapshot = await this.loadSnapshot();
     const proxies = snapshot.proxiesByCountry.get(countryCode) ?? [];
@@ -129,10 +129,7 @@ export class WebshareCountryProvider {
       throw new AppError(502, "webshare_proxy_invalid", "Selected Webshare proxy record has no usable endpoint");
     }
     const upstream = new URL(`http://${formatHost(proxyHost)}:${proxyPort}`);
-    const backboneUsername = this.mode === "backbone"
-      ? `${proxy.username}-${countryCode.toLowerCase()}${sessionId ? `-${sessionId}` : ""}`
-      : proxy.username;
-    upstream.username = encodeURIComponent(backboneUsername);
+    upstream.username = encodeURIComponent(proxy.username);
     upstream.password = encodeURIComponent(proxy.password);
     return upstream.href;
   }
