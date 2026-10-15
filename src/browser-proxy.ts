@@ -474,7 +474,7 @@ function modernPageBodyScript(timeoutMs: number): string {
     "  await new Promise((resolve) => setTimeout(resolve, 100));",
     "}",
     "return document.body?.innerText ?? '';"
-  ].join("\\n");
+  ].join("\n");
 }
 
 function extractMcpBody(value: unknown): string {

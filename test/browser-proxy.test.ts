@@ -21,7 +21,7 @@ function proxy(url: string, fetchImpl?: typeof fetch, options: { diagnosticDirec
   }, undefined, { fetch: fetchImpl, probePollIntervalMs: 1, ...options });
 }
 
-function mcpServer(body: string, options: { malformed?: boolean; malformedContent?: boolean; stateful?: boolean; rejectInitialize?: boolean; modern?: boolean; unstructuredModern?: boolean } = {}) {
+function mcpServer(body: string, options: { malformed?: boolean; malformedContent?: boolean; stateful?: boolean; rejectInitialize?: boolean; modern?: boolean; unstructuredModern?: boolean; rejectLiteralNewlines?: boolean } = {}) {
   let closed = false;
   let sessionClosed = false;
   let initialized = false;
@@ -51,7 +51,7 @@ function mcpServer(body: string, options: { malformed?: boolean; malformedConten
     const request = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
       method: string;
       id?: unknown;
-      params?: { name?: string };
+      params?: { name?: string; arguments?: { code?: unknown } };
     };
     const sessionHeader = readHeader(req, "mcp-session-id");
     methods.push(request.method);
@@ -111,9 +111,12 @@ function mcpServer(body: string, options: { malformed?: boolean; malformedConten
     } else if (request.method === "tools/call" && request.params?.name === "evaluate_script") {
       result = { structuredContent: { text: body } };
     } else if (request.method === "tools/call" && request.params?.name === "evaluate") {
-      result = req.url?.includes("structured=1") && !options.unstructuredModern
-        ? { structuredContent: { value: body } }
-        : { content: [{ type: "text", text: `[UNTRUSTED_PAGE_CONTENT origin=https://geo.example/json]\n${body}\n[END_UNTRUSTED_PAGE_CONTENT]` }] };
+      const code = request.params.arguments?.code;
+      result = options.rejectLiteralNewlines && typeof code === "string" && code.includes("\\n")
+        ? { content: [{ type: "text", text: "evaluate: SyntaxError: Invalid or unexpected token" }], isError: true }
+        : req.url?.includes("structured=1") && !options.unstructuredModern
+          ? { structuredContent: { value: body } }
+          : { content: [{ type: "text", text: `[UNTRUSTED_PAGE_CONTENT origin=https://geo.example/json]\n${body}\n[END_UNTRUSTED_PAGE_CONTENT]` }] };
     } else if (request.method === "tools/call" && request.params?.name === "close_page") {
       closed = true;
     }
@@ -165,7 +168,11 @@ test("probes BrowserOS egress and cleans up the temporary page", async () => {
 });
 
 test("supports the modern BrowserOS tabs, read, and evaluate tools", async () => {
-  const fixture = mcpServer(JSON.stringify({ country_code: "US", ip: "198.51.100.90" }), { stateful: true, modern: true });
+  const fixture = mcpServer(JSON.stringify({ country_code: "US", ip: "198.51.100.90" }), {
+    stateful: true,
+    modern: true,
+    rejectLiteralNewlines: true
+  });
   const url = await listen(fixture.server);
   try {
     const result = await proxy(url).verifyEgress({
