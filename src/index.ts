@@ -1,5 +1,6 @@
 import { pathToFileURL } from "node:url";
 import type { Server } from "node:http";
+import { join } from "node:path";
 import { BrowserMcpProxy } from "./browser-proxy.js";
 import { createGatewayServer } from "./gateway.js";
 import { loadConfig } from "./config.js";
@@ -30,7 +31,9 @@ export async function startService(config: AppConfig, logger = new JsonLogger(co
       upstreamConfigured: false
     });
 
-    const browserProxy = new BrowserMcpProxy(config.browserOs, logger);
+    const browserProxy = new BrowserMcpProxy(config.browserOs, logger, {
+      diagnosticDirectory: config.logging.directory || join(process.cwd(), "logs")
+    });
     const browserStatus = await browserProxy.checkReady();
     const browserLog = browserStatus.ok ? logger.info.bind(logger) : logger.warn.bind(logger);
     browserLog("browseros_mcp_status", {

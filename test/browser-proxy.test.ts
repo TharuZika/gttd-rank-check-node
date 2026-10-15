@@ -1,6 +1,9 @@
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { BrowserMcpProxy } from "../src/browser-proxy.js";
 import { AppError } from "../src/errors.js";
 
@@ -11,14 +14,14 @@ async function listen(server: ReturnType<typeof createServer>) {
   return `http://127.0.0.1:${(address as { port: number }).port}/mcp`;
 }
 
-function proxy(url: string, fetchImpl?: typeof fetch) {
+function proxy(url: string, fetchImpl?: typeof fetch, options: { diagnosticDirectory?: string } = {}) {
   return new BrowserMcpProxy({
     mcpUrl: new URL(url),
     requestTimeoutMs: 1000
-  }, undefined, { fetch: fetchImpl, probePollIntervalMs: 1 });
+  }, undefined, { fetch: fetchImpl, probePollIntervalMs: 1, ...options });
 }
 
-function mcpServer(body: string, options: { malformed?: boolean; malformedContent?: boolean; stateful?: boolean; rejectInitialize?: boolean; modern?: boolean } = {}) {
+function mcpServer(body: string, options: { malformed?: boolean; malformedContent?: boolean; stateful?: boolean; rejectInitialize?: boolean; modern?: boolean; unstructuredModern?: boolean } = {}) {
   let closed = false;
   let sessionClosed = false;
   let initialized = false;
@@ -108,7 +111,7 @@ function mcpServer(body: string, options: { malformed?: boolean; malformedConten
     } else if (request.method === "tools/call" && request.params?.name === "evaluate_script") {
       result = { structuredContent: { text: body } };
     } else if (request.method === "tools/call" && request.params?.name === "evaluate") {
-      result = req.url?.includes("structured=1")
+      result = req.url?.includes("structured=1") && !options.unstructuredModern
         ? { structuredContent: { value: body } }
         : { content: [{ type: "text", text: `[UNTRUSTED_PAGE_CONTENT origin=https://geo.example/json]\n${body}\n[END_UNTRUSTED_PAGE_CONTENT]` }] };
     } else if (request.method === "tools/call" && request.params?.name === "close_page") {
@@ -175,6 +178,31 @@ test("supports the modern BrowserOS tabs, read, and evaluate tools", async () =>
     assert.equal(fixture.wasClosed(), true);
     assert.equal(fixture.wasSessionClosed(), true);
   } finally {
+    await new Promise<void>((resolve, reject) => fixture.server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("parses the BrowserOS untrusted page wrapper when structured content is unavailable", async () => {
+  const fixture = mcpServer(JSON.stringify({ country_code: "US", ip: "198.51.100.90" }), {
+    stateful: true,
+    modern: true,
+    unstructuredModern: true
+  });
+  const url = await listen(fixture.server);
+  const diagnosticDirectory = mkdtempSync(join(tmpdir(), "gttd-browseros-"));
+  try {
+    const result = await proxy(url, undefined, { diagnosticDirectory }).verifyEgress({
+      verificationUrl: "https://geo.example/json",
+      expectedCountryCode: "US",
+      countryCodePath: "country_code",
+      timeoutMs: 1000
+    });
+    assert.deepEqual(result, { ok: true, observedCountryCode: "US", observedIp: "198.51.100.90" });
+    const diagnostic = readFileSync(join(diagnosticDirectory, "browseros-mcp-responses.txt"), "utf8");
+    assert.match(diagnostic, /UNTRUSTED_PAGE_CONTENT/);
+    assert.doesNotMatch(diagnostic, /geo\.example/);
+  } finally {
+    rmSync(diagnosticDirectory, { recursive: true, force: true });
     await new Promise<void>((resolve, reject) => fixture.server.close((error) => error ? reject(error) : resolve()));
   }
 });

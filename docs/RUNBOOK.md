@@ -46,6 +46,8 @@ npm run dev
 
 Use `npm run prod` to build and start the compiled service. Set `logging.directory` to `logs` in a project-local config if the current Windows user cannot write to the ProgramData log directory.
 
+When BrowserOS egress parsing fails, the node writes sanitized raw MCP responses to `browseros-mcp-responses.txt` in `logging.directory` (or the project `logs` directory when logging is unset). URLs and credential-like values are redacted before writing.
+
 `RANK_NODE_CONFIG` must point to a JSON configuration file such as `D:\path\to\gttd-rank-check-node\config.json`; do not point it to `dist\src\config.js`. When running directly from the clone, the project-local `.env` is used if the ProgramData `.env` does not exist.
 
 If no config exists, startup exits with a `config_not_found` message listing the accepted locations instead of an unhandled `ENOENT` stack trace.

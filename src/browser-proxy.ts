@@ -1,6 +1,8 @@
+import { appendFileSync, mkdirSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { join } from "node:path";
 import { AppError } from "./errors.js";
 import { parseEgressVerificationBody } from "./egress.js";
 import type { JsonLogger } from "./logger.js";
@@ -32,6 +34,7 @@ export interface BrowserEgressProbeOptions {
 export interface BrowserMcpProxyOptions {
   fetch?: Fetch;
   probePollIntervalMs?: number;
+  diagnosticDirectory?: string;
 }
 
 export class BrowserMcpProxy {
@@ -40,6 +43,7 @@ export class BrowserMcpProxy {
   private readonly logger?: JsonLogger;
   private readonly fetch: Fetch;
   private readonly probePollIntervalMs: number;
+  private readonly diagnosticDirectory?: string;
 
   constructor(config: AppConfig["browserOs"], logger?: JsonLogger, options: BrowserMcpProxyOptions = {}) {
     // BrowserOS returns evaluate() output as structuredContent only when
@@ -52,6 +56,7 @@ export class BrowserMcpProxy {
     this.logger = logger;
     this.fetch = options.fetch ?? fetch;
     this.probePollIntervalMs = options.probePollIntervalMs ?? 250;
+    this.diagnosticDirectory = options.diagnosticDirectory;
   }
 
   async checkReady(timeoutMs = Math.min(this.requestTimeoutMs, 1500)): Promise<{ ok: boolean; statusCode?: number; error?: string }> {
@@ -288,6 +293,7 @@ export class BrowserMcpProxy {
         signal: AbortSignal.timeout(timeoutMs)
       });
       responseText = await response.text();
+      this.writeMcpResponseDiagnostic(method, response.status, responseText);
     } catch (error) {
       if (error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError")) {
         throw new AppError(504, "browseros_probe_timeout", "BrowserOS egress verification timed out");
@@ -338,6 +344,23 @@ export class BrowserMcpProxy {
       throw new AppError(503, "browseros_session_cleanup_failed", "BrowserOS MCP session cleanup failed", {
         statusCode: response.status
       });
+    }
+  }
+
+  private writeMcpResponseDiagnostic(method: string, statusCode: number, responseText: string): void {
+    if (!this.diagnosticDirectory) {
+      return;
+    }
+    try {
+      mkdirSync(this.diagnosticDirectory, { recursive: true });
+      appendFileSync(join(this.diagnosticDirectory, "browseros-mcp-responses.txt"), `${JSON.stringify({
+        timestamp: new Date().toISOString(),
+        method,
+        statusCode,
+        response: sanitizeBrowserDiagnosticText(responseText)
+      })}\n`, "utf8");
+    } catch {
+      // Diagnostics must never change proxy readiness or fail an MCP request.
     }
   }
 
@@ -465,13 +488,29 @@ function extractMcpBody(value: unknown): string {
     (value as { content?: unknown } | null)?.content
   ];
   for (const candidate of candidates) {
-    if (typeof candidate === "string" && candidate.trim()) return candidate;
+    if (typeof candidate === "string" && candidate.trim()) return unwrapBrowserOsContent(candidate);
     if (Array.isArray(candidate)) {
       const text = candidate.map((item) => typeof item === "string" ? item : item?.text || item?.content || "").join("\n");
+      if (text.trim()) return unwrapBrowserOsContent(text);
+    }
+    if (candidate && typeof candidate === "object") {
+      const text = JSON.stringify(candidate);
       if (text.trim()) return text;
     }
   }
   return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+function unwrapBrowserOsContent(value: string): string {
+  const match = value.match(/^\s*\[UNTRUSTED_PAGE_CONTENT[^\]]*\][^\r\n]*\r?\n([\s\S]*?)\r?\n\[END_UNTRUSTED_PAGE_CONTENT[^\]]*\]\s*$/i);
+  return match?.[1] ?? value;
+}
+
+function sanitizeBrowserDiagnosticText(value: string): string {
+  return value
+    .replace(/\b(?:https?|socks5):\/\/[^\s"']+/gi, "[redacted-url]")
+    .replace(/(authorization\s*[:=]\s*)(?:bearer\s+)?[^\s,;}]+/gi, "$1****")
+    .replace(/((?:api[_-]?(?:key|token)|token|password|secret|credential)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;}]+)/gi, "$1****");
 }
 
 function selectRequest(url: URL) {

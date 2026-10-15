@@ -16,7 +16,9 @@ export interface GatewayOptions {
 }
 
 export function createGatewayServer(options: GatewayOptions): Server {
-  const browserProxy = options.browserProxy ?? new BrowserMcpProxy(options.config.browserOs, options.logger);
+  const browserProxy = options.browserProxy ?? new BrowserMcpProxy(options.config.browserOs, options.logger, {
+    diagnosticDirectory: options.config.logging.directory
+  });
   return createServer((req, res) => {
     void routeRequest(req, res, { ...options, browserProxy });
   });
