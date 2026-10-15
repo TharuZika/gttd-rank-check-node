@@ -196,20 +196,19 @@ test("selects exact allocated Backbone credentials through the configured Websha
   });
 
   assert.deepEqual(await provider.listCountries(), [{ countryCode: "US", countryName: "United States" }]);
-  const first = new URL(await provider.selectProxy("us"));
-  const second = new URL(await provider.selectProxy("US"));
-  const wrapped = new URL(await provider.selectProxy("US"));
+  const first = new URL(await provider.selectProxy("us", "1001"));
+  const second = new URL(await provider.selectProxy("US", "1002"));
+  const wrapped = new URL(await provider.selectProxy("US", "1003"));
 
   assert.equal(calls, 1);
   assert.equal(first.hostname, "p.webshare.io");
   assert.equal(Number(first.port || "80"), 80);
-  assert.equal(decodeURIComponent(first.username), "allocated-user-1");
+  assert.equal(decodeURIComponent(first.username), "allocated-user-1-us-1001");
   assert.equal(decodeURIComponent(first.password), "allocated-password-1");
   assert.notEqual(first.hostname, "191.96.254.138");
-  assert.equal(decodeURIComponent(second.username), "allocated-user-2");
+  assert.equal(decodeURIComponent(second.username), "allocated-user-2-us-1002");
   assert.equal(decodeURIComponent(second.password), "allocated-password-2");
-  assert.equal(wrapped.href, first.href);
-  assert.doesNotMatch(first.username, /-US-|-[A-Za-z]{2}-\d+$/);
+  assert.equal(decodeURIComponent(wrapped.username), "allocated-user-1-us-1003");
 });
 
 test("selects the allocated proxy_address and port in direct mode", async () => {
@@ -223,7 +222,7 @@ test("selects the allocated proxy_address and port in direct mode", async () => 
     })
   });
 
-  const selected = new URL(await provider.selectProxy("US"));
+  const selected = new URL(await provider.selectProxy("US", "1001"));
 
   assert.equal(selected.hostname, "198.51.100.25");
   assert.equal(Number(selected.port), 10001);
@@ -314,9 +313,9 @@ test("preserves allocated credentials containing percent sequences and special c
     })
   });
 
-  const selected = new URL(await provider.selectProxy("US"));
+  const selected = new URL(await provider.selectProxy("US", "1001"));
 
-  assert.equal(decodeURIComponent(selected.username), username);
+  assert.equal(decodeURIComponent(selected.username), `${username}-us-1001`);
   assert.equal(decodeURIComponent(selected.password), password);
 });
 
@@ -347,6 +346,6 @@ test("continues round-robin selection by stable record identity after cache reor
   const selectedAfterRefresh = new URL(await provider.selectProxy("US"));
 
   assert.equal(calls, 2);
-  assert.equal(decodeURIComponent(selectedFirst.username), "allocated-user-1");
-  assert.equal(decodeURIComponent(selectedAfterRefresh.username), "allocated-user-2");
+  assert.equal(decodeURIComponent(selectedFirst.username), "allocated-user-1-us");
+  assert.equal(decodeURIComponent(selectedAfterRefresh.username), "allocated-user-2-us");
 });
