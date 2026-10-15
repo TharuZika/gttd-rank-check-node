@@ -42,7 +42,12 @@ export class BrowserMcpProxy {
   private readonly probePollIntervalMs: number;
 
   constructor(config: AppConfig["browserOs"], logger?: JsonLogger, options: BrowserMcpProxyOptions = {}) {
-    this.mcpUrl = config.mcpUrl;
+    // BrowserOS returns evaluate() output as structuredContent only when
+    // structured mode is enabled. Without it, the response is an
+    // untrusted-text wrapper and cannot be parsed as the verification JSON.
+    const mcpUrl = new URL(config.mcpUrl.href);
+    mcpUrl.searchParams.set("structured", "1");
+    this.mcpUrl = mcpUrl;
     this.requestTimeoutMs = config.requestTimeoutMs;
     this.logger = logger;
     this.fetch = options.fetch ?? fetch;

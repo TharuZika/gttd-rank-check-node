@@ -108,7 +108,9 @@ function mcpServer(body: string, options: { malformed?: boolean; malformedConten
     } else if (request.method === "tools/call" && request.params?.name === "evaluate_script") {
       result = { structuredContent: { text: body } };
     } else if (request.method === "tools/call" && request.params?.name === "evaluate") {
-      result = { structuredContent: { value: body } };
+      result = req.url?.includes("structured=1")
+        ? { structuredContent: { value: body } }
+        : { content: [{ type: "text", text: `[UNTRUSTED_PAGE_CONTENT origin=https://geo.example/json]\n${body}\n[END_UNTRUSTED_PAGE_CONTENT]` }] };
     } else if (request.method === "tools/call" && request.params?.name === "close_page") {
       closed = true;
     }

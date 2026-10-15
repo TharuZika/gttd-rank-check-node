@@ -147,7 +147,7 @@ test("streams BrowserOS MCP responses through /browser only after proxy readines
   let observedBody = "";
   const browser = createServer((req: IncomingMessage, res: ServerResponse) => {
     assert.equal(req.method, "POST");
-    assert.equal(req.url, "/mcp");
+    assert.equal(req.url, "/mcp?structured=1");
     assert.equal(req.headers.accept, "text/event-stream");
     req.on("data", (chunk) => {
       observedBody += chunk.toString("utf8");
