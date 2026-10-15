@@ -117,7 +117,7 @@ async function routeRequest(
         sendJson(res, 503, { error: "proxy_not_ready", message: "Select and verify a proxy country before using BrowserOS", requestId });
         return;
       }
-      options.browserProxy.forward(req, res);
+      void options.browserProxy.forward(req, res);
       return;
     }
 

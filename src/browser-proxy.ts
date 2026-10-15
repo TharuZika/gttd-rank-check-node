@@ -44,6 +44,9 @@ export class BrowserMcpProxy {
   private readonly fetch: Fetch;
   private readonly probePollIntervalMs: number;
   private readonly diagnosticDirectory?: string;
+  private forwardSessionId?: string;
+  private forwardSessionInitialized = false;
+  private forwardSessionPromise?: Promise<string | undefined>;
 
   constructor(config: AppConfig["browserOs"], logger?: JsonLogger, options: BrowserMcpProxyOptions = {}) {
     // BrowserOS returns evaluate() output as structuredContent only when
@@ -204,19 +207,92 @@ export class BrowserMcpProxy {
     }
   }
 
-  forward(req: IncomingMessage, res: ServerResponse): void {
+  async forward(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    let body: Buffer;
+    try {
+      body = await readRequestBody(req);
+      const incomingSessionId = readHeader(req, "mcp-session-id");
+      const messageMethod = readMcpMethod(body);
+      let sessionId = incomingSessionId;
+
+      if (!incomingSessionId && messageMethod === "initialize") {
+        this.forwardSessionId = undefined;
+        this.forwardSessionInitialized = false;
+      } else if (!incomingSessionId && messageMethod) {
+        sessionId = await this.ensureForwardSession();
+      }
+
+      this.forwardRequest(req, res, body, sessionId, messageMethod === "initialize" && !incomingSessionId);
+    } catch (error) {
+      const appError = error instanceof AppError
+        ? error
+        : new AppError(502, "browseros_session_init_failed", "BrowserOS MCP session initialization failed");
+      if (!res.headersSent) {
+        res.writeHead(appError.statusCode, { "content-type": "application/json" });
+      }
+      res.end(JSON.stringify({ error: appError.code, message: appError.message }));
+    }
+  }
+
+  private async ensureForwardSession(): Promise<string | undefined> {
+    if (this.forwardSessionInitialized) {
+      return this.forwardSessionId;
+    }
+    this.forwardSessionPromise ??= (async () => {
+      const initialized = await this.requestMcp("initialize", {
+        protocolVersion: MCP_PROTOCOL_VERSION,
+        capabilities: {},
+        clientInfo: { name: "gttd-rank-check-node-forward", version: "1.0.0" }
+      }, this.requestTimeoutMs);
+      const sessionId = initialized.sessionId;
+      if (sessionId) {
+        await this.sendMcpNotification("notifications/initialized", {}, this.requestTimeoutMs, sessionId);
+      }
+      this.forwardSessionId = sessionId;
+      this.forwardSessionInitialized = true;
+      return sessionId;
+    })();
+
+    try {
+      return await this.forwardSessionPromise;
+    } catch (error) {
+      this.forwardSessionId = undefined;
+      this.forwardSessionInitialized = false;
+      throw error;
+    } finally {
+      this.forwardSessionPromise = undefined;
+    }
+  }
+
+  private forwardRequest(
+    req: IncomingMessage,
+    res: ServerResponse,
+    body: Buffer,
+    sessionId: string | undefined,
+    captureSession: boolean
+  ): void {
     const request = selectRequest(this.mcpUrl);
     let completed = false;
+    const headers = forwardRequestHeaders(req.headers);
+    if (sessionId) {
+      headers["mcp-session-id"] = sessionId;
+      headers["mcp-protocol-version"] = MCP_PROTOCOL_VERSION;
+    }
     const upstreamReq = request({
       protocol: this.mcpUrl.protocol,
       hostname: this.mcpUrl.hostname,
       port: this.mcpUrl.port,
       method: req.method,
       path: `${this.mcpUrl.pathname}${this.mcpUrl.search}`,
-      headers: forwardRequestHeaders(req.headers)
+      headers
     }, (upstreamRes) => {
       completed = true;
       clearTimeout(timeout);
+      const responseSessionId = readHeader(upstreamRes, "mcp-session-id");
+      if (captureSession && responseSessionId) {
+        this.forwardSessionId = responseSessionId;
+        this.forwardSessionInitialized = true;
+      }
       res.writeHead(upstreamRes.statusCode ?? 502, forwardResponseHeaders(upstreamRes.headers));
       upstreamRes.pipe(res);
     });
@@ -247,7 +323,7 @@ export class BrowserMcpProxy {
       res.end(JSON.stringify({ error: "browseros_timeout", message: "BrowserOS MCP endpoint timed out before response headers" }));
     }, this.requestTimeoutMs);
 
-    req.pipe(upstreamReq);
+    upstreamReq.end(body);
   }
 
   private async callMcp(method: string, params: Record<string, unknown>, timeoutMs: number, sessionId?: string): Promise<unknown> {
@@ -525,6 +601,31 @@ function sanitizeBrowserDiagnosticText(value: string): string {
 
 function selectRequest(url: URL) {
   return url.protocol === "https:" ? httpsRequest : httpRequest;
+}
+
+async function readRequestBody(req: IncomingMessage): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
+
+function readMcpMethod(body: Buffer): string | undefined {
+  if (body.length === 0) {
+    return undefined;
+  }
+  try {
+    const message = JSON.parse(body.toString("utf8")) as { method?: unknown };
+    return typeof message?.method === "string" ? message.method : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readHeader(message: { headers: IncomingMessage["headers"] }, name: string): string | undefined {
+  const value = message.headers[name.toLowerCase()];
+  return Array.isArray(value) ? value[0] : value;
 }
 
 function forwardRequestHeaders(headers: IncomingMessage["headers"]): Record<string, string | string[]> {

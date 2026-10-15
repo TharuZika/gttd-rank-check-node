@@ -148,11 +148,30 @@ test("streams BrowserOS MCP responses through /browser only after proxy readines
   const browser = createServer((req: IncomingMessage, res: ServerResponse) => {
     assert.equal(req.method, "POST");
     assert.equal(req.url, "/mcp?structured=1");
-    assert.equal(req.headers.accept, "text/event-stream");
+    let requestBody = "";
     req.on("data", (chunk) => {
-      observedBody += chunk.toString("utf8");
+      const text = chunk.toString("utf8");
+      requestBody += text;
+      observedBody += text;
     });
     req.on("end", () => {
+      const message = JSON.parse(requestBody) as { method?: string };
+      if (message.method === "tools/list") {
+        assert.equal(req.headers.accept, "text/event-stream");
+      }
+      if (message.method === "initialize") {
+        res.writeHead(200, {
+          "content-type": "application/json",
+          "mcp-session-id": "session-123"
+        });
+        res.end(JSON.stringify({ jsonrpc: "2.0", result: { protocolVersion: "2025-06-18" } }));
+        return;
+      }
+      if (message.method === "notifications/initialized") {
+        res.writeHead(202);
+        res.end();
+        return;
+      }
       res.writeHead(202, {
         "content-type": "text/event-stream",
         "mcp-session-id": "session-123"
@@ -194,6 +213,87 @@ test("streams BrowserOS MCP responses through /browser only after proxy readines
     assert.match(response.headers.get("content-type") ?? "", /text\/event-stream/);
     assert.equal(await response.text(), "event: message\ndata: ok\n\n");
     assert.match(observedBody, /tools\/list/);
+  } finally {
+    await gateway.close();
+    await browserServer.close();
+  }
+});
+
+test("initializes one BrowserOS MCP session for browser calls without a session header", async () => {
+  const methods: string[] = [];
+  const sessionHeaders: Array<string | undefined> = [];
+  const browser = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    const message = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { method: string };
+    const sessionHeader = Array.isArray(req.headers["mcp-session-id"])
+      ? req.headers["mcp-session-id"][0]
+      : req.headers["mcp-session-id"];
+    methods.push(message.method);
+    sessionHeaders.push(sessionHeader);
+
+    if (message.method === "initialize") {
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "mcp-session-id": "forward-session"
+      });
+      res.end(JSON.stringify({ jsonrpc: "2.0", result: { protocolVersion: "2025-06-18" } }));
+      return;
+    }
+    if (message.method === "notifications/initialized") {
+      res.writeHead(202);
+      res.end();
+      return;
+    }
+    if (sessionHeader !== "forward-session") {
+      res.writeHead(422, { "content-type": "text/plain" });
+      res.end("Unexpected message, expect initialize request");
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ jsonrpc: "2.0", result: { ok: true } }));
+  });
+  const browserServer = await listen(browser);
+  const config = testConfig(`${browserServer.url}/mcp`);
+  const relay = new ProxyRelay({ host: "127.0.0.1", port: 0 }, new JsonLogger({ directory: "", retentionFiles: 0, terminal: false }));
+  const manager = new ProxyStateManager({
+    countries: config.countries,
+    upstreamUrlTemplate: config.proxyProvider.upstreamUrlTemplate,
+    relay,
+    verifyEgress: async () => ({ ok: true, observedCountryCode: "US", observedIp: "203.0.113.51" }),
+    verifyBrowserEgress: successfulBrowserEgress
+  });
+  const app = createGatewayServer({ config, proxyState: manager, logger: new JsonLogger({ directory: "", retentionFiles: 0, terminal: false }) });
+  const gateway = await listen(app);
+
+  try {
+    await request(`${gateway.url}/proxy?country=US`, {
+      headers: { authorization: `Bearer ${apiToken}` }
+    });
+
+    const first = await request(`${gateway.url}/browser`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${apiToken}`,
+        accept: "application/json",
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", method: "tools/list", id: 1 })
+    });
+    const second = await request(`${gateway.url}/browser`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${apiToken}`,
+        accept: "application/json",
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", method: "tools/call", id: 2 })
+    });
+
+    assert.equal(first.status, 200);
+    assert.equal(second.status, 200);
+    assert.deepEqual(methods, ["initialize", "notifications/initialized", "tools/list", "tools/call"]);
+    assert.deepEqual(sessionHeaders, [undefined, "forward-session", "forward-session", "forward-session"]);
   } finally {
     await gateway.close();
     await browserServer.close();
