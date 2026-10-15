@@ -447,7 +447,17 @@ function extractPageId(value: unknown): number | null {
   }
   const text = extractMcpBody(value);
   const match = text.match(/(?:Page ID|opened page)[:\s]+(\d+)/i);
-  return match ? Number(match[1]) : null;
+  if (match) {
+    return Number(match[1]);
+  }
+
+  // BrowserOS may put "opened page N" in a separate content item before
+  // the untrusted snapshot wrapper. The body extractor intentionally keeps
+  // only the wrapped page data, so inspect the original MCP result as a
+  // fallback for the page identifier.
+  const rawText = typeof value === "string" ? value : JSON.stringify(value);
+  const rawMatch = rawText.match(/(?:Page ID|opened page)[:\s]+(\d+)/i);
+  return rawMatch ? Number(rawMatch[1]) : null;
 }
 
 function pageIdentifier(value: unknown): number | undefined {

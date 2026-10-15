@@ -98,7 +98,13 @@ function mcpServer(body: string, options: { malformed?: boolean; malformedConten
     } else if (request.method === "tools/call" && options.modern && request.params?.name === "tabs") {
       const action = (request.params as { arguments?: { action?: string } }).arguments?.action;
       if (action === "new") {
-        result = { structuredContent: { page: 42 } };
+        result = options.unstructuredModern
+          ? { content: [
+            { type: "text", text: "opened page 42" },
+            { type: "text", text: "[Page 42 snapshot]\n[UNTRUSTED_PAGE_CONTENT nonce=test origin=https://geo.example/json]\nform\n[END_UNTRUSTED_PAGE_CONTENT nonce=test]" },
+            { type: "text", text: "Tip: additional BrowserOS context" }
+          ] }
+          : { structuredContent: { page: 42 } };
       } else if (action === "list") {
         result = { structuredContent: { pages: [] } };
       } else if (action === "close") {
