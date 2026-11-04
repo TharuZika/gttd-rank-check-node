@@ -29,9 +29,10 @@ function Write-ResponseDiagnostics {
   $server = Get-ResponseHeader $Response "server"
   $contentType = Get-ResponseHeader $Response "content-type"
   $cfMitigated = Get-ResponseHeader $Response "cf-mitigated"
-  $source = if ($cfRay -or $cfMitigated -or $server -match "cloudflare") { "cloudflare" } else { "origin-or-unknown" }
+  $source = if ($cfMitigated) { "cloudflare-edge" } elseif ($cfRay -or $server -match "cloudflare") { "cloudflare-proxied" } else { "origin-or-unknown" }
   $details = "HTTP $statusCode (source=$source"
   if ($cfRay) { $details += "; cf-ray=$cfRay" }
+  if ($cfMitigated) { $details += "; cf-mitigated=$cfMitigated" }
   if ($server) { $details += "; server=$server" }
   if ($contentType) { $details += "; content-type=$contentType" }
   $details += ")"

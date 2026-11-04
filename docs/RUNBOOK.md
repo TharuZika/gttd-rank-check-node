@@ -119,9 +119,11 @@ scripts\diagnose.ps1 -ApiToken "<token>"
 ```
 
 The diagnostic script prints only HTTP status, source classification, `cf-ray`,
-`server`, and `content-type` headers for each request. It never prints response
-bodies or authorization values, so a `403` can be correlated with Cloudflare
-or the origin without exposing credentials.
+`cf-mitigated`, `server`, and `content-type` headers for each request. The
+source is `cloudflare-edge` only when Cloudflare sends an explicit mitigation
+signal; `cloudflare-proxied` means the request passed through Cloudflare but
+the origin may have generated the response. It never prints response bodies or
+authorization values, so a `403` can be investigated without exposing credentials.
 
 Expected production checks:
 
