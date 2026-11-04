@@ -8,6 +8,41 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Get-ResponseHeader {
+  param($Response, [string]$Name)
+  try {
+    $value = $Response.Headers[$Name]
+    if ($null -ne $value) {
+      return ([string]$value).Trim()
+    }
+  }
+  catch {
+    return ""
+  }
+  return ""
+}
+
+function Write-ResponseDiagnostics {
+  param($Response, [string]$Label, [switch]$Warning)
+  $statusCode = [int]$Response.StatusCode
+  $cfRay = Get-ResponseHeader $Response "cf-ray"
+  $server = Get-ResponseHeader $Response "server"
+  $contentType = Get-ResponseHeader $Response "content-type"
+  $cfMitigated = Get-ResponseHeader $Response "cf-mitigated"
+  $source = if ($cfRay -or $cfMitigated -or $server -match "cloudflare") { "cloudflare" } else { "origin-or-unknown" }
+  $details = "HTTP $statusCode (source=$source"
+  if ($cfRay) { $details += "; cf-ray=$cfRay" }
+  if ($server) { $details += "; server=$server" }
+  if ($contentType) { $details += "; content-type=$contentType" }
+  $details += ")"
+  if ($Warning) {
+    Write-Warning "$Label -> $details"
+  }
+  else {
+    Write-Host "$Label -> $details"
+  }
+}
+
 function Invoke-Gateway {
   param([string]$Path, [switch]$Auth)
   $headers = @{}
@@ -19,10 +54,17 @@ function Invoke-Gateway {
     $headers["Authorization"] = "Bearer $ApiToken"
   }
   try {
-    Invoke-RestMethod -Method Get -Uri "$GatewayUrl$Path" -Headers $headers -TimeoutSec 10
+    $response = Invoke-WebRequest -UseBasicParsing -Method Get -Uri "$GatewayUrl$Path" -Headers $headers -TimeoutSec 10
+    Write-ResponseDiagnostics $response "$Path"
   }
   catch {
-    Write-Warning "$Path failed: $($_.Exception.Message)"
+    $response = $_.Exception.Response
+    if ($response) {
+      Write-ResponseDiagnostics $response "$Path" -Warning
+    }
+    else {
+      Write-Warning "$Path network failure: unable to reach gateway"
+    }
   }
 }
 

@@ -118,6 +118,11 @@ Run:
 scripts\diagnose.ps1 -ApiToken "<token>"
 ```
 
+The diagnostic script prints only HTTP status, source classification, `cf-ray`,
+`server`, and `content-type` headers for each request. It never prints response
+bodies or authorization values, so a `403` can be correlated with Cloudflare
+or the origin without exposing credentials.
+
 Expected production checks:
 
 - `/health` returns `200`.
