@@ -452,7 +452,11 @@ export class BrowserMcpProxy {
       const page = Array.isArray(pages)
         ? pages.find((candidate) => pageIdentifier(candidate) === pageId)
         : undefined;
-      if (page && (listTool.name.toLowerCase() === "tabs" || (!page.isLoading && Number(page.loadProgress ?? 1) >= 0.9))) {
+      const pageLoaded = page && (
+        page.isLoading === false ||
+        (typeof page.isLoading !== "boolean" && Number(page.loadProgress ?? 1) >= 0.9)
+      );
+      if (page && (listTool.name.toLowerCase() === "tabs" || pageLoaded)) {
         return;
       }
       await new Promise((resolve) => setTimeout(resolve, Math.min(this.probePollIntervalMs, timeoutMs)));

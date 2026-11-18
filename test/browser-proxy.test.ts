@@ -21,7 +21,7 @@ function proxy(url: string, fetchImpl?: typeof fetch, options: { diagnosticDirec
   }, undefined, { fetch: fetchImpl, probePollIntervalMs: 1, ...options });
 }
 
-function mcpServer(body: string, options: { malformed?: boolean; malformedContent?: boolean; stateful?: boolean; rejectInitialize?: boolean; modern?: boolean; unstructuredModern?: boolean; rejectLiteralNewlines?: boolean } = {}) {
+function mcpServer(body: string, options: { malformed?: boolean; malformedContent?: boolean; stateful?: boolean; rejectInitialize?: boolean; modern?: boolean; unstructuredModern?: boolean; rejectLiteralNewlines?: boolean; zeroLoadProgress?: boolean } = {}) {
   let closed = false;
   let sessionClosed = false;
   let initialized = false;
@@ -113,7 +113,7 @@ function mcpServer(body: string, options: { malformed?: boolean; malformedConten
     } else if (request.method === "tools/call" && request.params?.name === "new_hidden_page") {
       result = { structuredContent: { pageId: 42 } };
     } else if (request.method === "tools/call" && request.params?.name === "list_pages") {
-      result = { structuredContent: { pages: [{ pageId: 42, isLoading: false, loadProgress: 1 }] } };
+      result = { structuredContent: { pages: [{ pageId: 42, isLoading: false, loadProgress: options.zeroLoadProgress ? 0 : 1 }] } };
     } else if (request.method === "tools/call" && request.params?.name === "evaluate_script") {
       result = { structuredContent: { text: body } };
     } else if (request.method === "tools/call" && request.params?.name === "evaluate") {
@@ -171,6 +171,22 @@ test("probes BrowserOS egress and cleans up the temporary page", async () => {
     assert.deepEqual(fixture.methods.slice(0, 2), ["initialize", "notifications/initialized"]);
     assert.deepEqual(fixture.notificationHasIds, [false]);
     assert.ok(fixture.sessionHeaders.slice(1).every((value) => value === "session-42"));
+  } finally {
+    await new Promise<void>((resolve, reject) => fixture.server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test("accepts a non-loading BrowserOS page when load progress is reported as zero", async () => {
+  const fixture = mcpServer(JSON.stringify({ country_code: "US", ip: "198.51.100.90" }), { zeroLoadProgress: true });
+  const url = await listen(fixture.server);
+  try {
+    const result = await proxy(url).verifyEgress({
+      verificationUrl: "https://geo.example/json",
+      expectedCountryCode: "US",
+      countryCodePath: "country_code",
+      timeoutMs: 1000
+    });
+    assert.deepEqual(result, { ok: true, observedCountryCode: "US", observedIp: "198.51.100.90" });
   } finally {
     await new Promise<void>((resolve, reject) => fixture.server.close((error) => error ? reject(error) : resolve()));
   }
