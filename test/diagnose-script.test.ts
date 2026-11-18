@@ -20,3 +20,11 @@ test("diagnostic script distinguishes Cloudflare edge mitigation from proxied or
   assert.match(script, /cf-mitigated/i);
   assert.match(script, /content-type/i);
 });
+
+test("diagnostic script reports safe gateway and BrowserOS error codes without printing response bodies", () => {
+  const script = readFileSync(scriptPath, "utf8");
+
+  assert.match(script, /gateway-error/i);
+  assert.match(script, /browser-error/i);
+  assert.doesNotMatch(script, /Write-(?:Host|Warning).*\$response\.Content/i);
+});

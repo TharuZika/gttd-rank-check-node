@@ -6,10 +6,10 @@
   },
   "proxyRelay": {
     "host": "127.0.0.1",
-    "port": 8890
+    "port": 8788
   },
   "browserOs": {
-    "mcpUrl": "http://127.0.0.1:9010/mcp",
+    "mcpUrl": "http://127.0.0.1:9000/mcp",
     "executablePath": "C:\\Program Files\\BrowserOS\\BrowserOS.exe",
     "requestTimeoutMs": 10000
   },

@@ -50,6 +50,10 @@ When BrowserOS egress parsing fails, the node writes sanitized raw MCP responses
 
 `RANK_NODE_CONFIG` must point to a JSON configuration file such as `D:\path\to\gttd-rank-check-node\config.json`; do not point it to `dist\src\config.js`. When running directly from the clone, the project-local `.env` is used if the ProgramData `.env` does not exist.
 
+### Runtime Configuration Authority
+
+An installed node, including one started manually from the clone, uses `C:\ProgramData\Findrhost\RankCheckNode\config.json` and `.env` before project-local files unless `RANK_NODE_CONFIG` is explicitly set. Editing `config.example.json` never changes a running node. Update the ProgramData files and restart the node for production changes; keep real tokens and Webshare credentials out of the repository. The verified BrowserOS MCP endpoint is `http://127.0.0.1:9000/mcp`; confirm it with authenticated `GET /mcp-status` after every BrowserOS or configuration change.
+
 If no config exists, startup exits with a `config_not_found` message listing the accepted locations instead of an unhandled `ENOENT` stack trace.
 
 ## BrowserOS Account

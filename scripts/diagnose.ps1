@@ -22,6 +22,54 @@ function Get-ResponseHeader {
   return ""
 }
 
+function Get-SafeGatewayErrorDetails {
+  param($Response)
+  $body = ""
+  try {
+    if ($null -ne $Response.Content) {
+      $body = [string]$Response.Content
+    }
+    elseif ($Response.GetResponseStream) {
+      $stream = $Response.GetResponseStream()
+      if ($stream) {
+        $reader = [System.IO.StreamReader]::new($stream)
+        try {
+          $body = $reader.ReadToEnd()
+        }
+        finally {
+          $reader.Dispose()
+        }
+      }
+    }
+  }
+  catch {
+    return @()
+  }
+
+  if ([string]::IsNullOrWhiteSpace($body)) {
+    return @()
+  }
+
+  try {
+    $payload = $body | ConvertFrom-Json -ErrorAction Stop
+  }
+  catch {
+    return @()
+  }
+
+  $details = @()
+  if ($payload.error -is [string] -and $payload.error -match '^[A-Za-z0-9_]{1,80}$') {
+    $details += "gateway-error=$($payload.error)"
+  }
+  if ($payload.browser -and $payload.browser.error -is [string] -and $payload.browser.error -match '^[A-Za-z0-9_]{1,80}$') {
+    $details += "browser-error=$($payload.browser.error)"
+  }
+  if ($payload.browser -and $payload.browser.statusCode -is [int]) {
+    $details += "browser-status=$($payload.browser.statusCode)"
+  }
+  return $details
+}
+
 function Write-ResponseDiagnostics {
   param($Response, [string]$Label, [switch]$Warning)
   $statusCode = [int]$Response.StatusCode
@@ -35,6 +83,7 @@ function Write-ResponseDiagnostics {
   if ($cfMitigated) { $details += "; cf-mitigated=$cfMitigated" }
   if ($server) { $details += "; server=$server" }
   if ($contentType) { $details += "; content-type=$contentType" }
+  foreach ($detail in Get-SafeGatewayErrorDetails $Response) { $details += "; $detail" }
   $details += ")"
   if ($Warning) {
     Write-Warning "$Label -> $details"
