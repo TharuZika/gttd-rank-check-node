@@ -153,7 +153,10 @@ export class ProxyRelay {
       const success = statusCode !== undefined && statusCode >= 200 && statusCode < 300;
       if (!success) {
         this.logger.warn("proxy_upstream_connect_rejected", { statusCode });
-        clientSocket.end(`HTTP/1.1 502 Upstream CONNECT Failed\r\n\r\n`);
+        const upstreamStatusHeader = statusCode === undefined
+          ? ""
+          : `X-Rank-Node-Upstream-Status: ${statusCode}\r\n`;
+        clientSocket.end(`HTTP/1.1 502 Upstream CONNECT Failed\r\n${upstreamStatusHeader}\r\n`);
         upstreamSocket.destroy();
         return;
       }

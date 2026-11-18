@@ -4,6 +4,43 @@ import { createServer, type Socket } from "node:net";
 import type { TLSSocket } from "node:tls";
 import { verifyEgressViaProxy } from "../src/egress.js";
 
+test("maps a relay-preserved Webshare 402 to a safe provider error", async () => {
+  const proxy = createServer((socket) => {
+    socket.once("data", () => {
+      socket.end(
+        "HTTP/1.1 502 Upstream CONNECT Failed\r\n" +
+        "X-Rank-Node-Upstream-Status: 402\r\n\r\n"
+      );
+    });
+  });
+  await new Promise<void>((resolve) => proxy.listen(0, "127.0.0.1", resolve));
+  const address = proxy.address();
+  assert.ok(address && typeof address === "object");
+
+  try {
+    await assert.rejects(
+      verifyEgressViaProxy({
+        localProxyUrl: `http://127.0.0.1:${address.port}`,
+        verificationUrl: "https://geo.example/lookup?format=json",
+        expectedCountryCode: "US",
+        timeoutMs: 1000,
+        countryCodePath: "country_code",
+        tlsConnector: () => {
+          throw new Error("TLS must not start after a rejected CONNECT");
+        }
+      }),
+      (error: any) => {
+        assert.equal(error.code, "webshare_plan_unavailable");
+        assert.equal(error.statusCode, 502);
+        assert.equal(error.details?.statusCode, 402);
+        return true;
+      }
+    );
+  } finally {
+    await new Promise<void>((resolve, reject) => proxy.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
 test("wraps the CONNECT tunnel socket in TLS before sending an HTTPS verification request", async () => {
   let tlsConnectorCalled = false;
   const proxy = createServer((socket) => handleConnectThenHttp(socket));

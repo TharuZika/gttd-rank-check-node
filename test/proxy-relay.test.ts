@@ -54,6 +54,7 @@ test("logs a sanitized upstream CONNECT rejection status", async () => {
     });
 
     assert.match(response, /502 Upstream CONNECT Failed/);
+    assert.match(response, /X-Rank-Node-Upstream-Status: 407/);
     assert.match(warnings.join("\n"), /proxy_upstream_connect_rejected/);
     assert.match(warnings.join("\n"), /statusCode.*407/);
     assert.doesNotMatch(warnings.join("\n"), /allocated-user|allocated-password|Proxy-Authenticate/);

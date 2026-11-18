@@ -174,8 +174,17 @@ function openConnectTunnel(proxyUrl: URL, targetUrl: URL, timeoutMs: number): Pr
       const statusLine = connectBuffer.subarray(0, connectBuffer.indexOf("\r\n")).toString("utf8");
       if (!/^HTTP\/1\.[01] 2\d\d/i.test(statusLine)) {
         clearTimeout(timeout);
+        const headerEnd = connectBuffer.indexOf("\r\n\r\n");
+        const headerText = connectBuffer.subarray(0, headerEnd).toString("utf8");
+        const upstreamStatusMatch = /^X-Rank-Node-Upstream-Status:\s*(\d{3})\s*$/im.exec(headerText);
+        const upstreamStatusCode = upstreamStatusMatch ? Number(upstreamStatusMatch[1]) : undefined;
         proxySocket.destroy();
-        reject(new AppError(502, "egress_connect_failed", "Egress proxy CONNECT failed"));
+        reject(new AppError(
+          502,
+          upstreamStatusCode === 402 ? "webshare_plan_unavailable" : "egress_connect_failed",
+          upstreamStatusCode === 402 ? "Webshare proxy plan is unavailable" : "Egress proxy CONNECT failed",
+          upstreamStatusCode === undefined ? undefined : { statusCode: upstreamStatusCode }
+        ));
         return;
       }
 
